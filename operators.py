@@ -44,29 +44,28 @@ class DYNAMICLINK_OT_scan_linked_assets(Operator):
     
     def execute(self, context):
         linked_assets = []
+        seen_libraries = set()
         
-        # Scan objects
-        for obj in bpy.data.objects:
-            if obj.library:
+        # Only scan objects that are actually in the scene
+        for obj in context.scene.objects:
+            if obj.library and obj.library.filepath not in seen_libraries:
                 linked_assets.append({
                     'type': 'OBJECT',
                     'name': obj.name,
                     'library': obj.library.filepath
                 })
+                seen_libraries.add(obj.library.filepath)
         
-        # Scan meshes
-        for mesh in bpy.data.meshes:
-            if mesh.library:
-                linked_assets.append({
-                    'type': 'MESH',
-                    'name': mesh.name,
-                    'library': mesh.library.filepath
-                })
+        # Also check for unique library files
+        unique_libraries = set()
+        for obj in bpy.data.objects:
+            if obj.library:
+                unique_libraries.add(obj.library.filepath)
         
         # Store results in scene properties
-        context.scene.dynamic_link_manager.linked_assets_count = len(linked_assets)
+        context.scene.dynamic_link_manager.linked_assets_count = len(unique_libraries)
         
-        self.report({'INFO'}, f"Found {len(linked_assets)} linked assets")
+        self.report({'INFO'}, f"Found {len(unique_libraries)} unique linked library files")
         return {'FINISHED'}
 
 def register():

@@ -30,7 +30,11 @@ class DYNAMICLINK_PT_main_panel(Panel):
         box.label(text="Scene Analysis")
         row = box.row()
         row.operator("dynamiclink.scan_linked_assets", text="Scan Linked Assets")
-        row.label(text=f"Found: {props.linked_assets_count}")
+        row.label(text=f"Libraries: {props.linked_assets_count}")
+        
+        # Show more detailed info if we have results
+        if props.linked_assets_count > 0:
+            box.label(text="Note: Counts unique library files, not individual objects")
         
         # Asset replacement section
         box = layout.box()
