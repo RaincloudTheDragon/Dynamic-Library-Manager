@@ -2,10 +2,10 @@ schema_version = "1.0.0"
 
 # Example of manifest file for a Blender extension
 # Change the values according to your extension
-id = "dynamic-link-manager"
-version = "1.0.0"
-name = "Dynamic-link-manager"
-tagline = "This is another extension"
+id = "dynamiclinkmanager"
+version = "0.0.1"
+name = "Dynamic Link Manager"
+tagline = "Replace linked assets and characters with ease"
 maintainer = "RaincloudTheDragon"
 # Supported types: "add-on", "theme"
 type = "add-on"
@@ -15,7 +15,7 @@ type = "add-on"
 
 # Optional list defined by Blender and server, see:
 # https://docs.blender.org/manual/en/dev/advanced/extensions/tags.html
-tags = ["Animation", "Sequencer"]
+tags = ["3D View", "Import-Export"]
 
 blender_version_min = "4.2.0"
 # # Optional: Blender version that the extension does not support, earlier versions are supported.
