@@ -43,8 +43,20 @@ class DYNAMICLINK_PT_main_panel(Panel):
         obj = context.active_object
         if obj:
             box.label(text=f"Selected: {obj.name}")
+            
+            # Check if object itself is linked
             if obj.library:
                 box.label(text=f"Linked from: {obj.library.filepath}")
+                row = box.row()
+                row.operator("dynamiclink.replace_linked_asset", text="Replace Asset")
+            # Check if object's data is linked
+            elif obj.data and obj.data.library:
+                box.label(text=f"Data linked from: {obj.data.library.filepath}")
+                row = box.row()
+                row.operator("dynamiclink.replace_linked_asset", text="Replace Asset")
+            # Check if it's a linked armature
+            elif obj.type == 'ARMATURE' and obj.data and hasattr(obj.data, 'library') and obj.data.library:
+                box.label(text=f"Armature linked from: {obj.data.library.filepath}")
                 row = box.row()
                 row.operator("dynamiclink.replace_linked_asset", text="Replace Asset")
             else:
