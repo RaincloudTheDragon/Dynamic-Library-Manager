@@ -166,36 +166,7 @@ class DYNAMICLINK_OT_scan_linked_assets(Operator):
                 lib_item.name = get_library_name(filepath)
                 lib_item.is_missing = is_file_missing(filepath)
                 
-                # Add linked datablocks info
-                for obj in bpy.data.objects:
-                    if hasattr(obj, 'library') and obj.library and obj.library.filepath == filepath:
-                        db_item = lib_item.linked_datablocks.add()
-                        db_item.name = obj.name
-                        db_item.type = "OBJECT"
-                    
-                    if obj.data and hasattr(obj.data, 'library') and obj.data.library and obj.data.library.filepath == filepath:
-                        db_item = lib_item.linked_datablocks.add()
-                        db_item.name = f"{obj.name} ({type(obj.data).__name__})"
-                        db_item.type = "DATA"
-                
-                # Check other data types
-                for armature in bpy.data.armatures:
-                    if hasattr(armature, 'library') and armature.library and armature.library.filepath == filepath:
-                        db_item = lib_item.linked_datablocks.add()
-                        db_item.name = armature.name
-                        db_item.type = "ARMATURE"
-                
-                for mesh in bpy.data.meshes:
-                    if hasattr(mesh, 'library') and mesh.library and mesh.library.filepath == filepath:
-                        db_item = lib_item.linked_datablocks.add()
-                        db_item.name = mesh.name
-                        db_item.type = "MESH"
-                
-                for material in bpy.data.materials:
-                    if hasattr(material, 'library') and material.library and material.library.filepath == filepath:
-                        db_item = lib_item.linked_datablocks.add()
-                        db_item.name = material.name
-                        db_item.type = "MATERIAL"
+
         
         # Show detailed info
         self.report({'INFO'}, f"Found {len(all_libraries)} unique linked library files")

@@ -67,12 +67,7 @@ class DYNAMICLINK_PT_main_panel(Panel):
                 open_op = row.operator("dynamiclink.open_linked_file", text="Open", icon='FILE_BLEND')
                 open_op.filepath = lib_item.filepath
                 
-                # Draw linked datablocks underneath
-                if lib_item.linked_datablocks:
-                    col = sub_box.column(align=True)
-                    col.label(text="  Linked Datablocks:")
-                    for db_item in lib_item.linked_datablocks:
-                        col.label(text=f"    - {db_item.name} ({db_item.type})")
+
         
         # Asset replacement section
         box = layout.box()
