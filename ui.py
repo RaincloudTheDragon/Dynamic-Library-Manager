@@ -1,8 +1,21 @@
 import bpy
 from bpy.types import Panel, PropertyGroup
-from bpy.props import IntProperty, StringProperty
+from bpy.props import IntProperty, StringProperty, BoolProperty, CollectionProperty
+
+# Properties for individual linked datablocks
+class LinkedDatablockItem(PropertyGroup):
+    name: StringProperty(name="Name", description="Name of the linked datablock")
+    type: StringProperty(name="Type", description="Type of the linked datablock")
+
+# Properties for a single linked library file
+class LinkedLibraryItem(PropertyGroup):
+    filepath: StringProperty(name="File Path", description="Path to the linked .blend file")
+    name: StringProperty(name="Name", description="Name of the linked .blend file")
+    is_missing: BoolProperty(name="Missing", description="True if the linked file is not found")
+    linked_datablocks: CollectionProperty(type=LinkedDatablockItem, name="Linked Datablocks")
 
 class DynamicLinkManagerProperties(PropertyGroup):
+    linked_libraries: CollectionProperty(type=LinkedLibraryItem, name="Linked Libraries")
     linked_assets_count: IntProperty(
         name="Linked Assets Count",
         description="Number of linked assets found in scene",
@@ -35,6 +48,31 @@ class DYNAMICLINK_PT_main_panel(Panel):
         # Show more detailed info if we have results
         if props.linked_assets_count > 0:
             box.label(text="Note: Counts unique library files, not individual objects")
+            
+            # List of linked libraries
+            box.label(text="Linked Libraries:")
+            for lib_item in props.linked_libraries:
+                sub_box = box.box()
+                row = sub_box.row(align=True)
+                
+                # Highlight missing files in red with warning icon
+                if lib_item.is_missing:
+                    row.label(text=f"MISSING: {lib_item.name}", icon='ERROR')
+                    row.label(text=lib_item.filepath, icon='FILE_FOLDER')
+                else:
+                    row.label(text=lib_item.name, icon='FILE_BLEND')
+                    row.label(text=lib_item.filepath, icon='FILE_FOLDER')
+                
+                # Add open button
+                open_op = row.operator("dynamiclink.open_linked_file", text="Open", icon='FILE_BLEND')
+                open_op.filepath = lib_item.filepath
+                
+                # Draw linked datablocks underneath
+                if lib_item.linked_datablocks:
+                    col = sub_box.column(align=True)
+                    col.label(text="  Linked Datablocks:")
+                    for db_item in lib_item.linked_datablocks:
+                        col.label(text=f"    - {db_item.name} ({db_item.type})")
         
         # Asset replacement section
         box = layout.box()
@@ -77,6 +115,8 @@ class DYNAMICLINK_PT_main_panel(Panel):
         row.prop(props, "selected_asset_path", text="Asset Path")
 
 def register():
+    bpy.utils.register_class(LinkedDatablockItem)
+    bpy.utils.register_class(LinkedLibraryItem)
     bpy.utils.register_class(DynamicLinkManagerProperties)
     bpy.utils.register_class(DYNAMICLINK_PT_main_panel)
     
@@ -89,3 +129,5 @@ def unregister():
     
     bpy.utils.unregister_class(DYNAMICLINK_PT_main_panel)
     bpy.utils.unregister_class(DynamicLinkManagerProperties)
+    bpy.utils.unregister_class(LinkedLibraryItem)
+    bpy.utils.unregister_class(LinkedDatablockItem)

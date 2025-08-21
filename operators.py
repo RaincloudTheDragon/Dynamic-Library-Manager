@@ -85,32 +85,30 @@ class DYNAMICLINK_OT_scan_linked_assets(Operator):
     bl_label = "Scan Linked Assets"
     
     def execute(self, context):
-        linked_assets = []
-        seen_libraries = set()
+        # Clear previous results
+        context.scene.dynamic_link_manager.linked_libraries.clear()
         
-        # Scan all objects in the scene
-        for obj in context.scene.objects:
-            # Check if object itself is linked
-            if hasattr(obj, 'library') and obj.library:
-                if obj.library.filepath not in seen_libraries:
-                    linked_assets.append({
-                        'type': 'OBJECT',
-                        'name': obj.name,
-                        'library': obj.library.filepath
-                    })
-                    seen_libraries.add(obj.library.filepath)
-            
-            # Check if object's data is linked
-            elif obj.data and hasattr(obj.data, 'library') and obj.data.library:
-                if obj.data.library.filepath not in seen_libraries:
-                    linked_assets.append({
-                        'type': 'DATA',
-                        'name': f"{obj.name} ({type(obj.data).__name__})",
-                        'library': obj.data.library.filepath
-                    })
-                    seen_libraries.add(obj.data.library.filepath)
+        # Dictionary to store library info with hierarchy
+        library_info = {}
         
-        # Check all data collections for linked items
+        # Function to check if file exists
+        def is_file_missing(filepath):
+            if not filepath:
+                return True
+            # Convert relative paths to absolute
+            if filepath.startswith('//'):
+                # This is a relative path, we can't easily check if it exists
+                # So we'll assume it's missing if it's relative
+                return True
+            return not os.path.exists(filepath)
+        
+        # Function to get library name from path
+        def get_library_name(filepath):
+            if not filepath:
+                return "Unknown"
+            return os.path.basename(filepath)
+        
+        # Scan all data collections for linked items
         all_libraries = set()
         
         # Check bpy.data.objects
@@ -135,8 +133,69 @@ class DYNAMICLINK_OT_scan_linked_assets(Operator):
             if hasattr(material, 'library') and material.library:
                 all_libraries.add(material.library.filepath)
         
+        # Check bpy.data.images
+        for image in bpy.data.images:
+            if hasattr(image, 'library') and image.library:
+                all_libraries.add(image.library.filepath)
+        
+        # Check bpy.data.textures
+        for texture in bpy.data.textures:
+            if hasattr(texture, 'library') and texture.library:
+                all_libraries.add(texture.library.filepath)
+        
+        # Check bpy.data.node_groups
+        for node_group in bpy.data.node_groups:
+            if hasattr(node_group, 'library') and node_group.library:
+                all_libraries.add(node_group.library.filepath)
+        
+        # Now try to detect indirect links by parsing the linked files
+        # This is a simplified approach - in practice, you'd need to parse .blend files
+        indirect_libraries = set()
+        
+        # For now, we'll just note that some libraries might have indirect links
+        # In a full implementation, you'd parse each .blend file to find its linked libraries
+        
         # Store results in scene properties
         context.scene.dynamic_link_manager.linked_assets_count = len(all_libraries)
+        
+        # Create library items for the UI
+        for filepath in sorted(all_libraries):
+            if filepath:
+                lib_item = context.scene.dynamic_link_manager.linked_libraries.add()
+                lib_item.filepath = filepath
+                lib_item.name = get_library_name(filepath)
+                lib_item.is_missing = is_file_missing(filepath)
+                
+                # Add linked datablocks info
+                for obj in bpy.data.objects:
+                    if hasattr(obj, 'library') and obj.library and obj.library.filepath == filepath:
+                        db_item = lib_item.linked_datablocks.add()
+                        db_item.name = obj.name
+                        db_item.type = "OBJECT"
+                    
+                    if obj.data and hasattr(obj.data, 'library') and obj.data.library and obj.data.library.filepath == filepath:
+                        db_item = lib_item.linked_datablocks.add()
+                        db_item.name = f"{obj.name} ({type(obj.data).__name__})"
+                        db_item.type = "DATA"
+                
+                # Check other data types
+                for armature in bpy.data.armatures:
+                    if hasattr(armature, 'library') and armature.library and armature.library.filepath == filepath:
+                        db_item = lib_item.linked_datablocks.add()
+                        db_item.name = armature.name
+                        db_item.type = "ARMATURE"
+                
+                for mesh in bpy.data.meshes:
+                    if hasattr(mesh, 'library') and mesh.library and mesh.library.filepath == filepath:
+                        db_item = lib_item.linked_datablocks.add()
+                        db_item.name = mesh.name
+                        db_item.type = "MESH"
+                
+                for material in bpy.data.materials:
+                    if hasattr(material, 'library') and material.library and material.library.filepath == filepath:
+                        db_item = lib_item.linked_datablocks.add()
+                        db_item.name = material.name
+                        db_item.type = "MATERIAL"
         
         # Show detailed info
         self.report({'INFO'}, f"Found {len(all_libraries)} unique linked library files")
@@ -150,6 +209,40 @@ def register():
     bpy.utils.register_class(DYNAMICLINK_OT_replace_linked_asset)
     bpy.utils.register_class(DYNAMICLINK_OT_scan_linked_assets)
 
+class DYNAMICLINK_OT_open_linked_file(Operator):
+    """Open the linked file in a new Blender instance"""
+    bl_idname = "dynamiclink.open_linked_file"
+    bl_label = "Open Linked File"
+    bl_options = {'REGISTER'}
+    
+    filepath: StringProperty(
+        name="File Path",
+        description="Path to the linked file",
+        default=""
+    )
+    
+    def execute(self, context):
+        if not self.filepath:
+            self.report({'ERROR'}, "No file path specified")
+            return {'CANCELLED'}
+        
+        # Try to open the linked file in a new Blender instance
+        try:
+            # Use Blender's built-in file browser to open the file
+            bpy.ops.wm.path_open(filepath=self.filepath)
+            self.report({'INFO'}, f"Opening linked file: {self.filepath}")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to open linked file: {e}")
+            return {'CANCELLED'}
+        
+        return {'FINISHED'}
+
+def register():
+    bpy.utils.register_class(DYNAMICLINK_OT_replace_linked_asset)
+    bpy.utils.register_class(DYNAMICLINK_OT_scan_linked_assets)
+    bpy.utils.register_class(DYNAMICLINK_OT_open_linked_file)
+
 def unregister():
+    bpy.utils.unregister_class(DYNAMICLINK_OT_open_linked_file)
     bpy.utils.unregister_class(DYNAMICLINK_OT_scan_linked_assets)
     bpy.utils.unregister_class(DYNAMICLINK_OT_replace_linked_asset)
