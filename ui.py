@@ -29,8 +29,8 @@ class DYNAMICLINK_UL_library_list(UIList):
             layout.scale_x = 0.3
             if item.is_missing:
                 layout.label(text="MISSING", icon='ERROR')
-            elif item.has_indirect_missing:
-                layout.label(text="INDIRECT", icon='ERROR')
+            elif item.is_indirect:
+                layout.label(text="INDIRECT", icon='INFO')
             else:
                 layout.label(text="OK", icon='FILE_BLEND')
             
@@ -63,8 +63,7 @@ class LinkedLibraryItem(PropertyGroup):
     filepath: StringProperty(name="File Path", description="Path to the linked .blend file")
     name: StringProperty(name="Name", description="Name of the linked .blend file")
     is_missing: BoolProperty(name="Missing", description="True if the linked file is not found")
-    has_indirect_missing: BoolProperty(name="Has Indirect Missing", description="True if an indirectly linked blend is missing")
-    indirect_missing_count: IntProperty(name="Indirect Missing Count", description="Number of indirectly linked blends that are missing")
+    is_indirect: BoolProperty(name="Is Indirect", description="True if this is an indirectly linked library")
     is_expanded: BoolProperty(name="Expanded", description="Whether this library item is expanded in the UI", default=True)
     linked_datablocks: CollectionProperty(type=LinkedDatablockItem, name="Linked Datablocks")
 
@@ -169,6 +168,11 @@ class DLM_PT_main_panel(Panel):
         layout = self.layout
         props = context.scene.dynamic_link_manager
         
+        # Path management buttons
+        row = layout.row()
+        row.operator("dlm.make_paths_relative", text="Make Paths Relative", icon='FILE_PARENT')
+        row.operator("dlm.make_paths_absolute", text="Make Paths Absolute", icon='FILE_FOLDER')
+        
         # Main scan section
         box = layout.box()
         box.label(text="Linked Libraries Analysis")
@@ -197,14 +201,6 @@ class DLM_PT_main_panel(Panel):
                 
                 # Action buttons below the list
                 row = box.row()
-                row.scale_x = 0.3
-                if props.linked_libraries and 0 <= props.linked_libraries_index < len(props.linked_libraries):
-                    selected_lib = props.linked_libraries[props.linked_libraries_index]
-                    open_op = row.operator("dlm.open_linked_file", text="Open Selected", icon='FILE_BLEND')
-                    open_op.filepath = selected_lib.filepath
-                else:
-                    row.operator("dlm.open_linked_file", text="Open Selected", icon='FILE_BLEND')
-                row.scale_x = 0.7
                 row.operator("dlm.reload_libraries", text="Reload Libraries", icon='FILE_REFRESH')
                 
                 # Search Paths Management - integrated into Linked Libraries Analysis
@@ -225,7 +221,7 @@ class DLM_PT_main_panel(Panel):
                     # Add button - Just the + button, right-justified
                     row = box.row()
                     row.alignment = 'RIGHT'
-                    row.operator("dlm.add_search_path", text="", icon='ADD')
+                    row.operator("dlm.add_search_path", text="Add search path", icon='ADD')
                     
                     # Main action button
                     missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)
@@ -238,8 +234,8 @@ class DLM_PT_main_panel(Panel):
                     selected_lib = props.linked_libraries[props.linked_libraries_index]
                     info_box = box.box()
                     
-                    # Make entire box red if library is missing or has indirect missing
-                    if selected_lib.is_missing or selected_lib.has_indirect_missing:
+                    # Make entire box red if library is missing
+                    if selected_lib.is_missing:
                         info_box.alert = True
                     
                     info_box.label(text=f"Selected: {selected_lib.name}")
@@ -247,9 +243,9 @@ class DLM_PT_main_panel(Panel):
                     if selected_lib.is_missing:
                         row = info_box.row()
                         row.label(text="Status: MISSING", icon='ERROR')
-                    elif selected_lib.has_indirect_missing:
+                    elif selected_lib.is_indirect:
                         row = info_box.row()
-                        row.label(text=f"Status: INDIRECT MISSING ({selected_lib.indirect_missing_count} dependencies)", icon='ERROR')
+                        row.label(text="Status: INDIRECT", icon='INFO')
                     else:
                         row = info_box.row()
                         row.label(text="Status: OK", icon='FILE_BLEND')

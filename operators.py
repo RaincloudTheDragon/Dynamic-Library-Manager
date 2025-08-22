@@ -88,9 +88,6 @@ class DLM_OT_scan_linked_assets(Operator):
         # Clear previous results
         context.scene.dynamic_link_manager.linked_libraries.clear()
         
-        # Dictionary to store library info with hierarchy
-        library_info = {}
-        
         # Function to check if file exists
         def is_file_missing(filepath):
             if not filepath:
@@ -156,16 +153,6 @@ class DLM_OT_scan_linked_assets(Operator):
             if hasattr(node_group, 'library') and node_group.library:
                 all_libraries.add(node_group.library.filepath)
         
-        # Analyze each library for indirect links
-        for filepath in all_libraries:
-            if filepath:
-                # Initialize with no indirect missing (will be updated during relink attempts)
-                library_info[filepath] = {
-                    'indirect_libraries': set(),
-                    'missing_indirect_count': 0,
-                    'has_indirect_missing': False
-                }
-        
         # Store results in scene properties
         context.scene.dynamic_link_manager.linked_assets_count = len(all_libraries)
         
@@ -177,14 +164,42 @@ class DLM_OT_scan_linked_assets(Operator):
                 lib_item.name = get_library_name(filepath)
                 lib_item.is_missing = is_file_missing(filepath)
                 
-                # Set indirect link information
-                if filepath in library_info:
-                    info = library_info[filepath]
-                    lib_item.has_indirect_missing = info['has_indirect_missing']
-                    lib_item.indirect_missing_count = info['missing_indirect_count']
-                else:
-                    lib_item.has_indirect_missing = False
-                    lib_item.indirect_missing_count = 0
+                # Check if this is an indirectly linked library using Blender's built-in property
+                # We need to find an actual datablock that uses this library to check is_library_indirect
+                is_indirect = False
+                for obj in bpy.data.objects:
+                    if hasattr(obj, 'library') and obj.library and obj.library.filepath == filepath:
+                        if hasattr(obj, 'is_library_indirect') and obj.is_library_indirect:
+                            is_indirect = True
+                            break
+                    if obj.data and hasattr(obj.data, 'library') and obj.data.library and obj.data.library.filepath == filepath:
+                        if hasattr(obj.data, 'is_library_indirect') and obj.data.is_library_indirect:
+                            is_indirect = True
+                            break
+                
+                # Also check other datablock types
+                if not is_indirect:
+                    for armature in bpy.data.armatures:
+                        if hasattr(armature, 'library') and armature.library and armature.library.filepath == filepath:
+                            if hasattr(armature, 'is_library_indirect') and armature.is_library_indirect:
+                                is_indirect = True
+                                break
+                
+                if not is_indirect:
+                    for mesh in bpy.data.meshes:
+                        if hasattr(mesh, 'library') and mesh.library and mesh.library.filepath == filepath:
+                            if hasattr(mesh, 'is_library_indirect') and mesh.is_library_indirect:
+                                is_indirect = True
+                                break
+                
+                if not is_indirect:
+                    for material in bpy.data.materials:
+                        if hasattr(material, 'library') and material.library and material.library.filepath == filepath:
+                            if hasattr(material, 'is_library_indirect') and material.is_library_indirect:
+                                is_indirect = True
+                                break
+                
+                lib_item.is_indirect = is_indirect
                 
 
         
@@ -531,6 +546,38 @@ class DLM_OT_reload_libraries(Operator):
                 return {'CANCELLED'}
         return {'FINISHED'}
 
+class DLM_OT_make_paths_relative(Operator):
+    """Make all file paths in the scene relative"""
+    bl_idname = "dlm.make_paths_relative"
+    bl_label = "Make Paths Relative"
+    bl_options = {'REGISTER'}
+    
+    def execute(self, context):
+        try:
+            # Use Blender's built-in operator to make paths relative
+            bpy.ops.file.make_paths_relative()
+            self.report({'INFO'}, "All file paths made relative")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to make paths relative: {e}")
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+class DLM_OT_make_paths_absolute(Operator):
+    """Make all file paths in the scene absolute"""
+    bl_idname = "dlm.make_paths_absolute"
+    bl_label = "Make Paths Absolute"
+    bl_options = {'REGISTER'}
+    
+    def execute(self, context):
+        try:
+            # Use Blender's built-in operator to make paths absolute
+            bpy.ops.file.make_paths_absolute()
+            self.report({'INFO'}, "All file paths made absolute")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to make paths absolute: {e}")
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
 def register():
     bpy.utils.register_class(DLM_OT_replace_linked_asset)
     bpy.utils.register_class(DLM_OT_scan_linked_assets)
@@ -542,6 +589,8 @@ def register():
     bpy.utils.register_class(DLM_OT_find_in_folders)
     bpy.utils.register_class(DLM_OT_fmt_style_find)
     bpy.utils.register_class(DLM_OT_reload_libraries)
+    bpy.utils.register_class(DLM_OT_make_paths_relative)
+    bpy.utils.register_class(DLM_OT_make_paths_absolute)
 
 def unregister():
     bpy.utils.unregister_class(DLM_OT_fmt_style_find)
@@ -554,3 +603,5 @@ def unregister():
     bpy.utils.unregister_class(DLM_OT_scan_linked_assets)
     bpy.utils.unregister_class(DLM_OT_replace_linked_asset)
     bpy.utils.unregister_class(DLM_OT_reload_libraries)
+    bpy.utils.unregister_class(DLM_OT_make_paths_relative)
+    bpy.utils.unregister_class(DLM_OT_make_paths_absolute)
