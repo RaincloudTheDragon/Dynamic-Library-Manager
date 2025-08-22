@@ -52,19 +52,31 @@ class DYNAMICLINK_PT_main_panel(Panel):
             # List of linked libraries
             box.label(text="Linked Libraries:")
             for lib_item in props.linked_libraries:
-                sub_box = box.box()
-                row = sub_box.row(align=True)
-                
-                # Highlight missing files in red with warning icon
+                # Create different box styles for missing vs existing libraries
                 if lib_item.is_missing:
-                    row.label(text=f"MISSING: {lib_item.name}", icon='ERROR')
-                    row.label(text=lib_item.filepath, icon='FILE_FOLDER')
+                    # Use a red-tinted box for missing libraries
+                    sub_box = box.box()
+                    sub_box.alert = True  # This makes the box have a red tint
                 else:
-                    row.label(text=lib_item.name, icon='FILE_BLEND')
-                    row.label(text=lib_item.filepath, icon='FILE_FOLDER')
+                    sub_box = box.box()
                 
-                # Add open button
-                open_op = row.operator("dynamiclink.open_linked_file", text="Open", icon='FILE_BLEND')
+                # First row: Library name and status
+                row1 = sub_box.row(align=True)
+                if lib_item.is_missing:
+                    row1.label(text=f"MISSING: {lib_item.name}", icon='ERROR')
+                else:
+                    row1.label(text=lib_item.name, icon='FILE_BLEND')
+                
+                # Second row: File path (full width)
+                row2 = sub_box.row()
+                row2.label(text=lib_item.filepath, icon='FILE_FOLDER')
+                
+                # Third row: Open button
+                row3 = sub_box.row()
+                if lib_item.is_missing:
+                    open_op = row3.operator("dynamiclink.open_linked_file", text="Open", icon='ERROR')
+                else:
+                    open_op = row3.operator("dynamiclink.open_linked_file", text="Open", icon='FILE_BLEND')
                 open_op.filepath = lib_item.filepath
                 
 
