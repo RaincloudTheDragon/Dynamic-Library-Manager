@@ -237,14 +237,22 @@ class DLM_PT_main_panel(Panel):
                 if props.linked_libraries and 0 <= props.linked_libraries_index < len(props.linked_libraries):
                     selected_lib = props.linked_libraries[props.linked_libraries_index]
                     info_box = box.box()
+                    
+                    # Make entire box red if library is missing or has indirect missing
+                    if selected_lib.is_missing or selected_lib.has_indirect_missing:
+                        info_box.alert = True
+                    
                     info_box.label(text=f"Selected: {selected_lib.name}")
                     
                     if selected_lib.is_missing:
-                        info_box.label(text="Status: MISSING", icon='ERROR')
+                        row = info_box.row()
+                        row.label(text="Status: MISSING", icon='ERROR')
                     elif selected_lib.has_indirect_missing:
-                        info_box.label(text=f"Status: INDIRECT MISSING ({selected_lib.indirect_missing_count} dependencies)", icon='ERROR')
+                        row = info_box.row()
+                        row.label(text=f"Status: INDIRECT MISSING ({selected_lib.indirect_missing_count} dependencies)", icon='ERROR')
                     else:
-                        info_box.label(text="Status: OK", icon='FILE_BLEND')
+                        row = info_box.row()
+                        row.label(text="Status: OK", icon='FILE_BLEND')
                     
                     # Show full path and Open Blend button
                     row = info_box.row()
