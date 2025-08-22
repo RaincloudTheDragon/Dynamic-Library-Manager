@@ -1,7 +1,7 @@
 import bpy
 import os
 from bpy.types import Operator
-from bpy.props import StringProperty, BoolProperty, EnumProperty
+from bpy.props import StringProperty, BoolProperty, EnumProperty, IntProperty
 
 class DYNAMICLINK_OT_replace_linked_asset(Operator):
     """Replace a linked asset with a new file"""
@@ -111,20 +111,9 @@ class DYNAMICLINK_OT_scan_linked_assets(Operator):
         # Function to detect indirect links by parsing .blend files safely
         def get_indirect_libraries(filepath):
             """Get libraries that are linked from within a .blend file"""
-            indirect_libs = set()
-            if not filepath or not os.path.exists(filepath):
-                return indirect_libs
-            
-            try:
-                # For now, return empty set to prevent data loss
-                # TODO: Implement safe indirect link detection without modifying scene
-                # The previous approach was dangerous and caused data deletion
-                pass
-                        
-            except Exception as e:
-                print(f"Error detecting indirect links in {filepath}: {e}")
-            
-            return indirect_libs
+            # This function is no longer used with the new approach
+            # Indirect links are now detected when attempting to relink
+            return set()
         
         # Scan all data collections for linked items
         all_libraries = set()
@@ -170,13 +159,11 @@ class DYNAMICLINK_OT_scan_linked_assets(Operator):
         # Analyze each library for indirect links
         for filepath in all_libraries:
             if filepath:
-                indirect_libs = get_indirect_libraries(filepath)
-                missing_indirect_count = sum(1 for lib in indirect_libs if is_file_missing(lib))
-                
+                # Initialize with no indirect missing (will be updated during relink attempts)
                 library_info[filepath] = {
-                    'indirect_libraries': indirect_libs,
-                    'missing_indirect_count': missing_indirect_count,
-                    'has_indirect_missing': missing_indirect_count > 0
+                    'indirect_libraries': set(),
+                    'missing_indirect_count': 0,
+                    'has_indirect_missing': False
                 }
         
         # Store results in scene properties
@@ -241,12 +228,197 @@ class DYNAMICLINK_OT_open_linked_file(Operator):
         
         return {'FINISHED'}
 
+class DYNAMICLINK_OT_add_search_path(Operator):
+    """Add a new search path for missing libraries"""
+    bl_idname = "dynamiclink.add_search_path"
+    bl_label = "Add Search Path"
+    bl_options = {'REGISTER'}
+    
+    filepath: StringProperty(
+        name="Search Path",
+        description="Path to search for missing linked libraries",
+        subtype='DIR_PATH'
+    )
+    
+    def execute(self, context):
+        prefs = context.preferences.addons.get(__package__)
+        if prefs:
+            new_path = prefs.preferences.search_paths.add()
+            new_path.path = self.filepath if self.filepath else "//"
+            self.report({'INFO'}, f"Added search path: {new_path.path}")
+        return {'FINISHED'}
+    
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+class DYNAMICLINK_OT_remove_search_path(Operator):
+    """Remove a search path"""
+    bl_idname = "dynamiclink.remove_search_path"
+    bl_label = "Remove Search Path"
+    bl_options = {'REGISTER'}
+    
+    index: IntProperty(
+        name="Index",
+        description="Index of the search path to remove",
+        default=0
+    )
+    
+    def execute(self, context):
+        prefs = context.preferences.addons.get(__package__)
+        if prefs and prefs.preferences.search_paths:
+            if 0 <= self.index < len(prefs.preferences.search_paths):
+                prefs.preferences.search_paths.remove(self.index)
+                self.report({'INFO'}, f"Removed search path at index {self.index}")
+            else:
+                self.report({'ERROR'}, f"Invalid index: {self.index}")
+        return {'FINISHED'}
+
+class DYNAMICLINK_OT_attempt_relink(Operator):
+    """Attempt to relink missing libraries using search paths"""
+    bl_idname = "dynamiclink.attempt_relink"
+    bl_label = "Attempt Relink"
+    bl_options = {'REGISTER'}
+    
+    def execute(self, context):
+        prefs = context.preferences.addons.get(__package__)
+        if not prefs or not prefs.preferences.search_paths:
+            self.report({'ERROR'}, "No search paths configured. Add search paths in addon preferences.")
+            return {'CANCELLED'}
+        
+        # Get missing libraries
+        missing_libs = [lib for lib in context.scene.dynamic_link_manager.linked_libraries if lib.is_missing]
+        if not missing_libs:
+            self.report({'INFO'}, "No missing libraries to relink")
+            return {'FINISHED'}
+        
+        self.report({'INFO'}, f"Attempting to relink {len(missing_libs)} missing libraries...")
+        
+        # Scan search paths for missing libraries (FMT-inspired approach)
+        files_dir_list = []
+        try:
+            for search_path in prefs.preferences.search_paths:
+                if search_path.path:
+                    for dirpath, dirnames, filenames in os.walk(bpy.path.abspath(search_path.path)):
+                        files_dir_list.append([dirpath, filenames])
+        except FileNotFoundError:
+            self.report({'ERROR'}, f"Error - Bad file path in search paths")
+            return {'CANCELLED'}
+        
+        # Try to find and relink each missing library
+        relinked_count = 0
+        indirect_errors = []
+        
+        for lib_item in missing_libs:
+            lib_filename = os.path.basename(lib_item.filepath)
+            found = False
+            
+            # Search through all directories
+            for dir_info in files_dir_list:
+                dirpath, filenames = dir_info
+                
+                # Look for exact filename match
+                if lib_filename in filenames:
+                    new_path = os.path.join(dirpath, lib_filename)
+                    try:
+                        # Try to relink using Blender's system
+                        # This will naturally detect indirect links if they exist
+                        bpy.ops.file.find_missing_files()
+                        found = True
+                        relinked_count += 1
+                        break
+                    except Exception as e:
+                        error_msg = str(e)
+                        if "unable to relocate indirectly linked library" in error_msg:
+                            indirect_errors.append(lib_item.filepath)
+                            print(f"Indirect link detected for: {lib_item.filepath}")
+                        else:
+                            print(f"Error relinking {lib_item.filepath}: {e}")
+            
+            if not found:
+                print(f"Could not find {lib_filename} in search paths")
+        
+        # Update the UI to show indirect links
+        if indirect_errors:
+            self.report({'WARNING'}, f"Found {len(indirect_errors)} indirectly linked libraries")
+            # Mark these as having indirect missing
+            for lib_item in context.scene.dynamic_link_manager.linked_libraries:
+                if lib_item.filepath in indirect_errors:
+                    lib_item.has_indirect_missing = True
+                    lib_item.indirect_missing_count = 1
+        
+        self.report({'INFO'}, f"Relink attempt complete. Relinked: {relinked_count}, Indirect: {len(indirect_errors)}")
+        return {'FINISHED'}
+
+class DYNAMICLINK_OT_find_in_folders(Operator):
+    """Find missing libraries in search folders and subfolders"""
+    bl_idname = "dynamiclink.find_in_folders"
+    bl_label = "Find in Folders"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        prefs = context.preferences.addons.get(__package__)
+        if not prefs or not prefs.preferences.search_paths:
+            self.report({'ERROR'}, "No search paths configured. Add search paths in addon preferences.")
+            return {'CANCELLED'}
+        
+        # Get missing libraries
+        missing_libs = [lib for lib in context.scene.dynamic_link_manager.linked_libraries if lib.is_missing]
+        if not missing_libs:
+            self.report({'INFO'}, "No missing libraries to find")
+            return {'FINISHED'}
+        
+        self.report({'INFO'}, f"Searching for {len(missing_libs)} missing libraries...")
+        
+        # Scan search paths for missing libraries (FMT-inspired approach)
+        files_dir_list = []
+        try:
+            for search_path in prefs.preferences.search_paths:
+                if search_path.path:
+                    for dirpath, dirnames, filenames in os.walk(bpy.path.abspath(search_path.path)):
+                        files_dir_list.append([dirpath, filenames])
+        except FileNotFoundError:
+            self.report({'ERROR'}, f"Error - Bad file path in search paths")
+            return {'CANCELLED'}
+        
+        # Try to find each missing library
+        found_count = 0
+        
+        for lib_item in missing_libs:
+            lib_filename = os.path.basename(lib_item.filepath)
+            
+            # Search through all directories
+            for dir_info in files_dir_list:
+                dirpath, filenames = dir_info
+                
+                # Look for exact filename match
+                if lib_filename in filenames:
+                    new_path = os.path.join(dirpath, lib_filename)
+                    self.report({'INFO'}, f"Found {lib_filename} at: {new_path}")
+                    found_count += 1
+                    break
+        
+        if found_count > 0:
+            self.report({'INFO'}, f"Found {found_count} libraries in search paths")
+        else:
+            self.report({'WARNING'}, "No libraries found in search paths")
+        
+        return {'FINISHED'}
+
 def register():
     bpy.utils.register_class(DYNAMICLINK_OT_replace_linked_asset)
     bpy.utils.register_class(DYNAMICLINK_OT_scan_linked_assets)
     bpy.utils.register_class(DYNAMICLINK_OT_open_linked_file)
+    bpy.utils.register_class(DYNAMICLINK_OT_add_search_path)
+    bpy.utils.register_class(DYNAMICLINK_OT_remove_search_path)
+    bpy.utils.register_class(DYNAMICLINK_OT_attempt_relink)
+    bpy.utils.register_class(DYNAMICLINK_OT_find_in_folders)
 
 def unregister():
+    bpy.utils.unregister_class(DYNAMICLINK_OT_find_in_folders)
+    bpy.utils.unregister_class(DYNAMICLINK_OT_attempt_relink)
+    bpy.utils.unregister_class(DYNAMICLINK_OT_remove_search_path)
+    bpy.utils.unregister_class(DYNAMICLINK_OT_add_search_path)
     bpy.utils.unregister_class(DYNAMICLINK_OT_open_linked_file)
     bpy.utils.unregister_class(DYNAMICLINK_OT_scan_linked_assets)
     bpy.utils.unregister_class(DYNAMICLINK_OT_replace_linked_asset)

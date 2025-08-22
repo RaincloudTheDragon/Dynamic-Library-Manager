@@ -1,11 +1,49 @@
 import bpy
-from bpy.types import Panel, PropertyGroup
+from bpy.types import Panel, PropertyGroup, AddonPreferences, UIList
 from bpy.props import IntProperty, StringProperty, BoolProperty, CollectionProperty
+
+# Properties for search paths
+class SearchPathItem(PropertyGroup):
+    path: StringProperty(
+        name="Search Path",
+        description="Path to search for missing linked libraries",
+        subtype='DIR_PATH'
+    )
 
 # Properties for individual linked datablocks
 class LinkedDatablockItem(PropertyGroup):
     name: StringProperty(name="Name", description="Name of the linked datablock")
     type: StringProperty(name="Type", description="Type of the linked datablock")
+
+# FMT-style UIList for linked libraries
+class DYNAMICLINK_UL_library_list(UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        custom_icon = 'FILE_BLEND'
+        
+        if self.layout_type in {'DEFAULT', 'COMPACT'}:
+            # Library name and status (FMT-style layout)
+            layout.scale_x = 0.4
+            layout.label(text=item.name)
+            
+            # Status indicator
+            layout.scale_x = 0.3
+            if item.is_missing:
+                layout.label(text="MISSING", icon='ERROR')
+            elif item.has_indirect_missing:
+                layout.label(text="INDIRECT", icon='ERROR')
+            else:
+                layout.label(text="OK", icon='FILE_BLEND')
+            
+            # File path (FMT-style truncated)
+            layout.scale_x = 0.3
+            path_text = item.filepath
+            if len(path_text) > 30:
+                path_text = "..." + path_text[-27:]
+            layout.label(text=path_text, icon='FILE_FOLDER')
+            
+        elif self.layout_type in {'GRID'}:
+            layout.alignment = 'CENTER'
+            layout.label(text="", icon=custom_icon)
 
 # Properties for a single linked library file
 class LinkedLibraryItem(PropertyGroup):
@@ -19,6 +57,11 @@ class LinkedLibraryItem(PropertyGroup):
 
 class DynamicLinkManagerProperties(PropertyGroup):
     linked_libraries: CollectionProperty(type=LinkedLibraryItem, name="Linked Libraries")
+    linked_libraries_index: IntProperty(
+        name="Linked Libraries Index",
+        description="Index of the selected linked library",
+        default=0
+    )
     linked_assets_count: IntProperty(
         name="Linked Assets Count",
         description="Number of linked assets found in scene",
@@ -36,6 +79,41 @@ class DynamicLinkManagerProperties(PropertyGroup):
         description="Path to the currently selected asset",
         default=""
     )
+    
+    # FMT-inspired settings
+    search_different_extensions: BoolProperty(
+        name="Search for libraries with different extensions",
+        description="Look for .blend files with different extensions (e.g., .blend1, .blend2)",
+        default=False
+    )
+
+# Addon preferences for search paths
+class DynamicLinkManagerPreferences(AddonPreferences):
+    bl_idname = __package__
+    
+    search_paths: CollectionProperty(
+        type=SearchPathItem,
+        name="Search Paths",
+        description="Paths to search for missing linked libraries"
+    )
+    
+    def draw(self, context):
+        layout = self.layout
+        
+        # Search paths section
+        box = layout.box()
+        box.label(text="Search Paths for Missing Libraries")
+        
+        # Add/remove search paths
+        row = box.row()
+        row.operator("dynamiclink.add_search_path", text="Add Search Path", icon='ADD')
+        row.operator("dynamiclink.remove_search_path", text="Remove Selected", icon='REMOVE')
+        
+        # List search paths
+        for i, path_item in enumerate(self.search_paths):
+            row = box.row()
+            row.prop(path_item, "path", text=f"Path {i+1}")
+            row.operator("dynamiclink.remove_search_path", text="", icon='X').index = i
 
 class DYNAMICLINK_PT_main_panel(Panel):
     bl_space_type = 'VIEW_3D'
@@ -47,73 +125,60 @@ class DYNAMICLINK_PT_main_panel(Panel):
         layout = self.layout
         props = context.scene.dynamic_link_manager
         
-        # Scan section
+        # Main scan section (FMT-style)
         box = layout.box()
-        box.label(text="Scene Analysis")
+        box.label(text="Linked Libraries Analysis")
         row = box.row()
-        row.operator("dynamiclink.scan_linked_assets", text="Scan Linked Assets")
-        row.label(text=f"Libraries: {props.linked_assets_count}")
+        row.operator("dynamiclink.scan_linked_assets", text="Scan Linked Assets", icon='FILE_REFRESH')
+        row.label(text=f"({props.linked_assets_count} libraries)")
         
         # Show more detailed info if we have results
         if props.linked_assets_count > 0:
-             # Linked Libraries section with single dropdown
-             row = box.row(align=True)
-             
-             # Dropdown arrow for the entire section
-             icon = 'DISCLOSURE_TRI_DOWN' if props.linked_libraries_expanded else 'DISCLOSURE_TRI_RIGHT'
-             row.prop(props, "linked_libraries_expanded", text="", icon=icon, icon_only=True)
-             
-             # Section header
-             row.label(text="Linked Libraries:")
-             row.label(text=f"({props.linked_assets_count} libraries)")
-             
-             # Only show library details if section is expanded
-             if props.linked_libraries_expanded:
-                 # List all libraries
-                 for i, lib_item in enumerate(props.linked_libraries):
-                     # Create a box for each library
-                     if lib_item.is_missing or lib_item.has_indirect_missing:
-                         sub_box = box.box()
-                         sub_box.alert = True  # Red tint for missing/indirect missing
-                     else:
-                         sub_box = box.box()
-                     
-                     # Library name and status
-                     row1 = sub_box.row(align=True)
-                     row1.label(text=lib_item.name, icon='FILE_BLEND')
-                     
-                     # Status indicator
-                     if lib_item.is_missing:
-                         row1.label(text="MISSING", icon='ERROR')
-                     elif lib_item.has_indirect_missing:
-                         row1.label(text="INDIRECT MISSING", icon='ERROR')
-                     
-                     # File path (truncated for space)
-                     row2 = sub_box.row()
-                     path_text = lib_item.filepath
-                     if len(path_text) > 50:
-                         path_text = "..." + path_text[-47:]
-                     row2.label(text=path_text, icon='FILE_FOLDER')
-                     
-                     # Warning message for indirect missing
-                     if lib_item.has_indirect_missing and not lib_item.is_missing:
-                         row3 = sub_box.row()
-                         row3.label(text=f"⚠️ {lib_item.indirect_missing_count} indirectly linked blend(s) missing", icon='ERROR')
-                         row3.label(text="Open this blend to relink", icon='INFO')
-                     
-                     # Action buttons row
-                     row4 = sub_box.row(align=True)
-                     
-                     # Open button
-                     if lib_item.is_missing or lib_item.has_indirect_missing:
-                         open_op = row4.operator("dynamiclink.open_linked_file", text="Open", icon='ERROR')
-                     else:
-                         open_op = row4.operator("dynamiclink.open_linked_file", text="Open", icon='FILE_BLEND')
-                     open_op.filepath = lib_item.filepath
+            # Linked Libraries section with single dropdown (FMT-style)
+            row = box.row(align=True)
+            
+            # Dropdown arrow for the entire section
+            icon = 'DISCLOSURE_TRI_DOWN' if props.linked_libraries_expanded else 'DISCLOSURE_TRI_RIGHT'
+            row.prop(props, "linked_libraries_expanded", text="", icon=icon, icon_only=True)
+            
+            # Section header
+            row.label(text="Linked Libraries:")
+            row.label(text=f"({props.linked_assets_count} libraries)")
+            
+            # Only show library details if section is expanded
+            if props.linked_libraries_expanded:
+                # FMT-style compact list view
+                row = box.row()
+                row.template_list("DYNAMICLINK_UL_library_list", "", props, "linked_libraries", props, "linked_libraries_index")
                 
-
+                # Action buttons below the list (FMT-style)
+                row = box.row()
+                row.scale_x = 0.3
+                if props.linked_libraries and 0 <= props.linked_libraries_index < len(props.linked_libraries):
+                    selected_lib = props.linked_libraries[props.linked_libraries_index]
+                    open_op = row.operator("dynamiclink.open_linked_file", text="Open Selected", icon='FILE_BLEND')
+                    open_op.filepath = selected_lib.filepath
+                else:
+                    row.operator("dynamiclink.open_linked_file", text="Open Selected", icon='FILE_BLEND')
+                row.scale_x = 0.7
+                row.operator("dynamiclink.scan_linked_assets", text="Refresh", icon='FILE_REFRESH')
+                
+                # Show details of selected item (FMT-style info display)
+                if props.linked_libraries and 0 <= props.linked_libraries_index < len(props.linked_libraries):
+                    selected_lib = props.linked_libraries[props.linked_libraries_index]
+                    info_box = box.box()
+                    info_box.label(text=f"Selected: {selected_lib.name}")
+                    
+                    if selected_lib.is_missing:
+                        info_box.label(text="Status: MISSING", icon='ERROR')
+                    elif selected_lib.has_indirect_missing:
+                        info_box.label(text=f"Status: INDIRECT MISSING ({selected_lib.indirect_missing_count} dependencies)", icon='ERROR')
+                    else:
+                        info_box.label(text="Status: OK", icon='FILE_BLEND')
+                    
+                    info_box.label(text=f"Path: {selected_lib.filepath}", icon='FILE_FOLDER')
         
-        # Asset replacement section
+        # Asset replacement section (FMT-style)
         box = layout.box()
         box.label(text="Asset Replacement")
         
@@ -141,22 +206,51 @@ class DYNAMICLINK_PT_main_panel(Panel):
         else:
             box.label(text="No object selected")
         
-        # Batch operations section
+        # Search Paths section (FMT-style)
         box = layout.box()
-        box.label(text="Batch Operations")
-        row = box.row()
-        row.operator("dynamiclink.scan_linked_assets", text="Refresh Scan")
+        box.label(text="Search Paths for Missing Libraries")
         
-        # Settings section
+        # Get preferences
+        prefs = context.preferences.addons.get(__package__)
+        if prefs:
+            # Show current search paths with FMT-style management
+            if prefs.preferences.search_paths:
+                for i, path_item in enumerate(prefs.preferences.search_paths):
+                    row = box.row()
+                    row.prop(path_item, "path", text=f"Search path {i+1}")
+                    row.operator("dynamiclink.remove_search_path", text="", icon='X').index = i
+            
+            # Add new search path
+            row = box.row()
+            row.operator("dynamiclink.add_search_path", text="Add Search Path", icon='ADD')
+            
+            # FMT-inspired settings
+            if len(prefs.preferences.search_paths) > 0:
+                row = box.row()
+                row.prop(props, "search_different_extensions", text="Search for libraries with different extensions")
+            
+            # Find and relink buttons (FMT-style button layout)
+            if props.linked_assets_count > 0:
+                missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)
+                if missing_count > 0:
+                    row = box.row()
+                    row.operator("dynamiclink.find_in_folders", text="Find libraries in these folders", icon='VIEWZOOM')
+                    row = box.row()
+                    row.operator("dynamiclink.attempt_relink", text="Attempt to relink found libraries", icon='FILE_REFRESH')
+        
+        # Settings section (FMT-style)
         box = layout.box()
         box.label(text="Settings")
         row = box.row()
         row.prop(props, "selected_asset_path", text="Asset Path")
 
 def register():
+    bpy.utils.register_class(SearchPathItem)
     bpy.utils.register_class(LinkedDatablockItem)
+    bpy.utils.register_class(DYNAMICLINK_UL_library_list)
     bpy.utils.register_class(LinkedLibraryItem)
     bpy.utils.register_class(DynamicLinkManagerProperties)
+    bpy.utils.register_class(DynamicLinkManagerPreferences)
     bpy.utils.register_class(DYNAMICLINK_PT_main_panel)
     
     # Register properties to scene
@@ -167,6 +261,9 @@ def unregister():
     del bpy.types.Scene.dynamic_link_manager
     
     bpy.utils.unregister_class(DYNAMICLINK_PT_main_panel)
+    bpy.utils.unregister_class(DynamicLinkManagerPreferences)
     bpy.utils.unregister_class(DynamicLinkManagerProperties)
     bpy.utils.unregister_class(LinkedLibraryItem)
+    bpy.utils.unregister_class(DYNAMICLINK_UL_library_list)
     bpy.utils.unregister_class(LinkedDatablockItem)
+    bpy.utils.unregister_class(SearchPathItem)
