@@ -12,6 +12,9 @@ class LinkedLibraryItem(PropertyGroup):
     filepath: StringProperty(name="File Path", description="Path to the linked .blend file")
     name: StringProperty(name="Name", description="Name of the linked .blend file")
     is_missing: BoolProperty(name="Missing", description="True if the linked file is not found")
+    has_indirect_missing: BoolProperty(name="Has Indirect Missing", description="True if an indirectly linked blend is missing")
+    indirect_missing_count: IntProperty(name="Indirect Missing Count", description="Number of indirectly linked blends that are missing")
+    is_expanded: BoolProperty(name="Expanded", description="Whether this library item is expanded in the UI", default=True)
     linked_datablocks: CollectionProperty(type=LinkedDatablockItem, name="Linked Datablocks")
 
 class DynamicLinkManagerProperties(PropertyGroup):
@@ -20,6 +23,12 @@ class DynamicLinkManagerProperties(PropertyGroup):
         name="Linked Assets Count",
         description="Number of linked assets found in scene",
         default=0
+    )
+    
+    linked_libraries_expanded: BoolProperty(
+        name="Linked Libraries Expanded",
+        description="Whether the linked libraries section is expanded",
+        default=True
     )
     
     selected_asset_path: StringProperty(
@@ -47,37 +56,60 @@ class DYNAMICLINK_PT_main_panel(Panel):
         
         # Show more detailed info if we have results
         if props.linked_assets_count > 0:
-            box.label(text="Note: Counts unique library files, not individual objects")
-            
-            # List of linked libraries
-            box.label(text="Linked Libraries:")
-            for lib_item in props.linked_libraries:
-                # Create different box styles for missing vs existing libraries
-                if lib_item.is_missing:
-                    # Use a red-tinted box for missing libraries
-                    sub_box = box.box()
-                    sub_box.alert = True  # This makes the box have a red tint
-                else:
-                    sub_box = box.box()
-                
-                # First row: Library name and status
-                row1 = sub_box.row(align=True)
-                if lib_item.is_missing:
-                    row1.label(text=f"MISSING: {lib_item.name}", icon='ERROR')
-                else:
-                    row1.label(text=lib_item.name, icon='FILE_BLEND')
-                
-                # Second row: File path (full width)
-                row2 = sub_box.row()
-                row2.label(text=lib_item.filepath, icon='FILE_FOLDER')
-                
-                # Third row: Open button
-                row3 = sub_box.row()
-                if lib_item.is_missing:
-                    open_op = row3.operator("dynamiclink.open_linked_file", text="Open", icon='ERROR')
-                else:
-                    open_op = row3.operator("dynamiclink.open_linked_file", text="Open", icon='FILE_BLEND')
-                open_op.filepath = lib_item.filepath
+             # Linked Libraries section with single dropdown
+             row = box.row(align=True)
+             
+             # Dropdown arrow for the entire section
+             icon = 'DISCLOSURE_TRI_DOWN' if props.linked_libraries_expanded else 'DISCLOSURE_TRI_RIGHT'
+             row.prop(props, "linked_libraries_expanded", text="", icon=icon, icon_only=True)
+             
+             # Section header
+             row.label(text="Linked Libraries:")
+             row.label(text=f"({props.linked_assets_count} libraries)")
+             
+             # Only show library details if section is expanded
+             if props.linked_libraries_expanded:
+                 # List all libraries
+                 for i, lib_item in enumerate(props.linked_libraries):
+                     # Create a box for each library
+                     if lib_item.is_missing or lib_item.has_indirect_missing:
+                         sub_box = box.box()
+                         sub_box.alert = True  # Red tint for missing/indirect missing
+                     else:
+                         sub_box = box.box()
+                     
+                     # Library name and status
+                     row1 = sub_box.row(align=True)
+                     row1.label(text=lib_item.name, icon='FILE_BLEND')
+                     
+                     # Status indicator
+                     if lib_item.is_missing:
+                         row1.label(text="MISSING", icon='ERROR')
+                     elif lib_item.has_indirect_missing:
+                         row1.label(text="INDIRECT MISSING", icon='ERROR')
+                     
+                     # File path (truncated for space)
+                     row2 = sub_box.row()
+                     path_text = lib_item.filepath
+                     if len(path_text) > 50:
+                         path_text = "..." + path_text[-47:]
+                     row2.label(text=path_text, icon='FILE_FOLDER')
+                     
+                     # Warning message for indirect missing
+                     if lib_item.has_indirect_missing and not lib_item.is_missing:
+                         row3 = sub_box.row()
+                         row3.label(text=f"⚠️ {lib_item.indirect_missing_count} indirectly linked blend(s) missing", icon='ERROR')
+                         row3.label(text="Open this blend to relink", icon='INFO')
+                     
+                     # Action buttons row
+                     row4 = sub_box.row(align=True)
+                     
+                     # Open button
+                     if lib_item.is_missing or lib_item.has_indirect_missing:
+                         open_op = row4.operator("dynamiclink.open_linked_file", text="Open", icon='ERROR')
+                     else:
+                         open_op = row4.operator("dynamiclink.open_linked_file", text="Open", icon='FILE_BLEND')
+                     open_op.filepath = lib_item.filepath
                 
 
         

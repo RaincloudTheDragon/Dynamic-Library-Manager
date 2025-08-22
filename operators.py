@@ -108,8 +108,27 @@ class DYNAMICLINK_OT_scan_linked_assets(Operator):
                 return "Unknown"
             return os.path.basename(filepath)
         
+        # Function to detect indirect links by parsing .blend files safely
+        def get_indirect_libraries(filepath):
+            """Get libraries that are linked from within a .blend file"""
+            indirect_libs = set()
+            if not filepath or not os.path.exists(filepath):
+                return indirect_libs
+            
+            try:
+                # For now, return empty set to prevent data loss
+                # TODO: Implement safe indirect link detection without modifying scene
+                # The previous approach was dangerous and caused data deletion
+                pass
+                        
+            except Exception as e:
+                print(f"Error detecting indirect links in {filepath}: {e}")
+            
+            return indirect_libs
+        
         # Scan all data collections for linked items
         all_libraries = set()
+        library_info = {}  # Store additional info about each library
         
         # Check bpy.data.objects
         for obj in bpy.data.objects:
@@ -148,12 +167,17 @@ class DYNAMICLINK_OT_scan_linked_assets(Operator):
             if hasattr(node_group, 'library') and node_group.library:
                 all_libraries.add(node_group.library.filepath)
         
-        # Now try to detect indirect links by parsing the linked files
-        # This is a simplified approach - in practice, you'd need to parse .blend files
-        indirect_libraries = set()
-        
-        # For now, we'll just note that some libraries might have indirect links
-        # In a full implementation, you'd parse each .blend file to find its linked libraries
+        # Analyze each library for indirect links
+        for filepath in all_libraries:
+            if filepath:
+                indirect_libs = get_indirect_libraries(filepath)
+                missing_indirect_count = sum(1 for lib in indirect_libs if is_file_missing(lib))
+                
+                library_info[filepath] = {
+                    'indirect_libraries': indirect_libs,
+                    'missing_indirect_count': missing_indirect_count,
+                    'has_indirect_missing': missing_indirect_count > 0
+                }
         
         # Store results in scene properties
         context.scene.dynamic_link_manager.linked_assets_count = len(all_libraries)
@@ -165,6 +189,15 @@ class DYNAMICLINK_OT_scan_linked_assets(Operator):
                 lib_item.filepath = filepath
                 lib_item.name = get_library_name(filepath)
                 lib_item.is_missing = is_file_missing(filepath)
+                
+                # Set indirect link information
+                if filepath in library_info:
+                    info = library_info[filepath]
+                    lib_item.has_indirect_missing = info['has_indirect_missing']
+                    lib_item.indirect_missing_count = info['missing_indirect_count']
+                else:
+                    lib_item.has_indirect_missing = False
+                    lib_item.indirect_missing_count = 0
                 
 
         
