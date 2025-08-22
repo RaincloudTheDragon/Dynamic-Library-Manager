@@ -3,9 +3,9 @@ import os
 from bpy.types import Operator
 from bpy.props import StringProperty, BoolProperty, EnumProperty, IntProperty
 
-class DYNAMICLINK_OT_replace_linked_asset(Operator):
+class DLM_OT_replace_linked_asset(Operator):
     """Replace a linked asset with a new file"""
-    bl_idname = "dynamiclink.replace_linked_asset"
+    bl_idname = "dlm.replace_linked_asset"
     bl_label = "Replace Linked Asset"
     bl_options = {'REGISTER', 'UNDO'}
     
@@ -79,9 +79,9 @@ class DYNAMICLINK_OT_replace_linked_asset(Operator):
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
-class DYNAMICLINK_OT_scan_linked_assets(Operator):
+class DLM_OT_scan_linked_assets(Operator):
     """Scan scene for all linked assets"""
-    bl_idname = "dynamiclink.scan_linked_assets"
+    bl_idname = "dlm.scan_linked_assets"
     bl_label = "Scan Linked Assets"
     
     def execute(self, context):
@@ -196,9 +196,9 @@ class DYNAMICLINK_OT_scan_linked_assets(Operator):
         
         return {'FINISHED'}
 
-class DYNAMICLINK_OT_fmt_style_find(Operator):
+class DLM_OT_fmt_style_find(Operator):
     """Find missing libraries in search folders using FMT-style approach"""
-    bl_idname = "dynamiclink.fmt_style_find"
+    bl_idname = "dlm.fmt_style_find"
     bl_label = "FMT-Style Find"
     bl_options = {'REGISTER', 'UNDO'}
     
@@ -243,15 +243,7 @@ class DYNAMICLINK_OT_fmt_style_find(Operator):
                     found_count += 1
                     break
                 
-                # Extension replacement (FMT-style)
-                elif context.scene.dynamic_link_manager.search_different_extensions:
-                    base_name = os.path.splitext(lib_filename)[0]
-                    for filename in filenames:
-                        if base_name == os.path.splitext(filename)[0]:
-                            new_path = os.path.join(dirpath, filename)
-                            self.report({'INFO'}, f"Found {lib_filename} (as {filename}) at: {new_path}")
-                            found_count += 1
-                            break
+
         
         # FMT-style reporting
         if found_count > 0:
@@ -262,12 +254,12 @@ class DYNAMICLINK_OT_fmt_style_find(Operator):
         return {'FINISHED'}
 
 def register():
-    bpy.utils.register_class(DYNAMICLINK_OT_replace_linked_asset)
-    bpy.utils.register_class(DYNAMICLINK_OT_scan_linked_assets)
+    bpy.utils.register_class(DLM_OT_replace_linked_asset)
+    bpy.utils.register_class(DLM_OT_scan_linked_assets)
 
-class DYNAMICLINK_OT_open_linked_file(Operator):
+class DLM_OT_open_linked_file(Operator):
     """Open the linked file in a new Blender instance"""
-    bl_idname = "dynamiclink.open_linked_file"
+    bl_idname = "dlm.open_linked_file"
     bl_label = "Open Linked File"
     bl_options = {'REGISTER'}
     
@@ -293,33 +285,23 @@ class DYNAMICLINK_OT_open_linked_file(Operator):
         
         return {'FINISHED'}
 
-class DYNAMICLINK_OT_add_search_path(Operator):
+class DLM_OT_add_search_path(Operator):
     """Add a new search path for missing libraries"""
-    bl_idname = "dynamiclink.add_search_path"
+    bl_idname = "dlm.add_search_path"
     bl_label = "Add Search Path"
     bl_options = {'REGISTER'}
-    
-    filepath: StringProperty(
-        name="Search Path",
-        description="Path to search for missing linked libraries",
-        subtype='DIR_PATH'
-    )
     
     def execute(self, context):
         prefs = context.preferences.addons.get(__package__)
         if prefs:
             new_path = prefs.preferences.search_paths.add()
-            new_path.path = self.filepath if self.filepath else "//"
+            new_path.path = "//"  # Default to relative path
             self.report({'INFO'}, f"Added search path: {new_path.path}")
         return {'FINISHED'}
-    
-    def invoke(self, context, event):
-        context.window_manager.fileselect_add(self)
-        return {'RUNNING_MODAL'}
 
-class DYNAMICLINK_OT_remove_search_path(Operator):
+class DLM_OT_remove_search_path(Operator):
     """Remove a search path"""
-    bl_idname = "dynamiclink.remove_search_path"
+    bl_idname = "dlm.remove_search_path"
     bl_label = "Remove Search Path"
     bl_options = {'REGISTER'}
     
@@ -339,9 +321,9 @@ class DYNAMICLINK_OT_remove_search_path(Operator):
                 self.report({'ERROR'}, f"Invalid index: {self.index}")
         return {'FINISHED'}
 
-class DYNAMICLINK_OT_attempt_relink(Operator):
+class DLM_OT_attempt_relink(Operator):
     """Attempt to relink missing libraries using search paths"""
-    bl_idname = "dynamiclink.attempt_relink"
+    bl_idname = "dlm.attempt_relink"
     bl_label = "Attempt Relink"
     bl_options = {'REGISTER'}
     
@@ -400,25 +382,6 @@ class DYNAMICLINK_OT_attempt_relink(Operator):
                         else:
                             print(f"Error relinking {lib_item.filepath}: {e}")
                 
-                # FMT-style extension replacement
-                if not found and context.scene.dynamic_link_manager.search_different_extensions:
-                    base_name = os.path.splitext(lib_filename)[0]
-                    for filename in filenames:
-                        if base_name == os.path.splitext(filename)[0]:
-                            new_path = os.path.join(dirpath, filename)
-                            try:
-                                bpy.ops.file.find_missing_files()
-                                found = True
-                                relinked_count += 1
-                                break
-                            except Exception as e:
-                                error_msg = str(e)
-                                if "unable to relocate indirectly linked library" in error_msg:
-                                    indirect_errors.append(lib_item.filepath)
-                                    print(f"Indirect link detected for: {lib_item.filepath}")
-                                else:
-                                    print(f"Error relinking {lib_item.filepath}: {e}")
-                
                 if found:
                     break
             
@@ -437,9 +400,9 @@ class DYNAMICLINK_OT_attempt_relink(Operator):
         self.report({'INFO'}, f"Relink attempt complete. Relinked: {relinked_count}, Indirect: {len(indirect_errors)}")
         return {'FINISHED'}
 
-class DYNAMICLINK_OT_find_in_folders(Operator):
+class DLM_OT_find_in_folders(Operator):
     """Find missing libraries in search folders and subfolders"""
-    bl_idname = "dynamiclink.find_in_folders"
+    bl_idname = "dlm.find_in_folders"
     bl_label = "Find in Folders"
     bl_options = {'REGISTER', 'UNDO'}
     
@@ -487,16 +450,7 @@ class DYNAMICLINK_OT_find_in_folders(Operator):
                     found = True
                     break
                 
-                # FMT-style extension replacement
-                if context.scene.dynamic_link_manager.search_different_extensions:
-                    base_name = os.path.splitext(lib_filename)[0]
-                    for filename in filenames:
-                        if base_name == os.path.splitext(filename)[0]:
-                            new_path = os.path.join(dirpath, filename)
-                            self.report({'INFO'}, f"Found {lib_filename} (as {filename}) at: {new_path}")
-                            found_count += 1
-                            found = True
-                            break
+
                 
                 if found:
                     break
@@ -511,22 +465,61 @@ class DYNAMICLINK_OT_find_in_folders(Operator):
         
         return {'FINISHED'}
 
+class DLM_OT_browse_search_path(Operator):
+    """Browse for a search path directory"""
+    bl_idname = "dlm.browse_search_path"
+    bl_label = "Browse Search Path"
+    bl_options = {'REGISTER'}
+    
+    index: IntProperty(
+        name="Index",
+        description="Index of the search path to browse for",
+        default=0
+    )
+    
+    filepath: StringProperty(
+        name="Search Path",
+        description="Path to search for missing linked libraries",
+        subtype='DIR_PATH'
+    )
+    
+    def execute(self, context):
+        prefs = context.preferences.addons.get(__package__)
+        if prefs and prefs.preferences.search_paths:
+            if 0 <= self.index < len(prefs.preferences.search_paths):
+                prefs.preferences.search_paths[self.index].path = self.filepath
+                self.report({'INFO'}, f"Updated search path {self.index + 1}: {self.filepath}")
+            else:
+                self.report({'ERROR'}, f"Invalid index: {self.index}")
+        return {'FINISHED'}
+    
+    def invoke(self, context, event):
+        prefs = context.preferences.addons.get(__package__)
+        if prefs and prefs.preferences.search_paths:
+            if 0 <= self.index < len(prefs.preferences.search_paths):
+                # Set the current path as default
+                self.filepath = prefs.preferences.search_paths[self.index].path
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
 def register():
-    bpy.utils.register_class(DYNAMICLINK_OT_replace_linked_asset)
-    bpy.utils.register_class(DYNAMICLINK_OT_scan_linked_assets)
-    bpy.utils.register_class(DYNAMICLINK_OT_open_linked_file)
-    bpy.utils.register_class(DYNAMICLINK_OT_add_search_path)
-    bpy.utils.register_class(DYNAMICLINK_OT_remove_search_path)
-    bpy.utils.register_class(DYNAMICLINK_OT_attempt_relink)
-    bpy.utils.register_class(DYNAMICLINK_OT_find_in_folders)
-    bpy.utils.register_class(DYNAMICLINK_OT_fmt_style_find)
+    bpy.utils.register_class(DLM_OT_replace_linked_asset)
+    bpy.utils.register_class(DLM_OT_scan_linked_assets)
+    bpy.utils.register_class(DLM_OT_open_linked_file)
+    bpy.utils.register_class(DLM_OT_add_search_path)
+    bpy.utils.register_class(DLM_OT_remove_search_path)
+    bpy.utils.register_class(DLM_OT_browse_search_path)
+    bpy.utils.register_class(DLM_OT_attempt_relink)
+    bpy.utils.register_class(DLM_OT_find_in_folders)
+    bpy.utils.register_class(DLM_OT_fmt_style_find)
 
 def unregister():
-    bpy.utils.unregister_class(DYNAMICLINK_OT_fmt_style_find)
-    bpy.utils.unregister_class(DYNAMICLINK_OT_find_in_folders)
-    bpy.utils.unregister_class(DYNAMICLINK_OT_attempt_relink)
-    bpy.utils.unregister_class(DYNAMICLINK_OT_remove_search_path)
-    bpy.utils.unregister_class(DYNAMICLINK_OT_add_search_path)
-    bpy.utils.unregister_class(DYNAMICLINK_OT_open_linked_file)
-    bpy.utils.unregister_class(DYNAMICLINK_OT_scan_linked_assets)
-    bpy.utils.unregister_class(DYNAMICLINK_OT_replace_linked_asset)
+    bpy.utils.unregister_class(DLM_OT_fmt_style_find)
+    bpy.utils.unregister_class(DLM_OT_find_in_folders)
+    bpy.utils.unregister_class(DLM_OT_attempt_relink)
+    bpy.utils.unregister_class(DLM_OT_browse_search_path)
+    bpy.utils.unregister_class(DLM_OT_remove_search_path)
+    bpy.utils.unregister_class(DLM_OT_add_search_path)
+    bpy.utils.unregister_class(DLM_OT_open_linked_file)
+    bpy.utils.unregister_class(DLM_OT_scan_linked_assets)
+    bpy.utils.unregister_class(DLM_OT_replace_linked_asset)

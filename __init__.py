@@ -31,13 +31,25 @@ from bpy.types import Panel, Operator, PropertyGroup
 from . import operators
 from . import ui
 
+def ensure_default_search_path():
+    """Ensure there's always at least one search path"""
+    prefs = bpy.context.preferences.addons.get(__name__)
+    if prefs and len(prefs.preferences.search_paths) == 0:
+        new_path = prefs.preferences.search_paths.add()
+        new_path.path = "//"  # Default to relative path
+
 def register():
     operators.register()
     ui.register()
+    # Ensure default search path exists
+    bpy.app.handlers.load_post.append(ensure_default_search_path)
 
 def unregister():
     ui.unregister()
     operators.unregister()
+    # Remove the handler
+    if ensure_default_search_path in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(ensure_default_search_path)
 
 if __name__ == "__main__":
     register()

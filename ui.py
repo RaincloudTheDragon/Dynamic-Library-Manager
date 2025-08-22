@@ -79,13 +79,6 @@ class DynamicLinkManagerProperties(PropertyGroup):
         description="Path to the currently selected asset",
         default=""
     )
-    
-    # FMT-inspired settings
-    search_different_extensions: BoolProperty(
-        name="Search for libraries with different extensions",
-        description="Look for .blend files with different extensions (e.g., .blend1, .blend2)",
-        default=False
-    )
 
 # Addon preferences for search paths
 class DynamicLinkManagerPreferences(AddonPreferences):
@@ -100,20 +93,23 @@ class DynamicLinkManagerPreferences(AddonPreferences):
     def draw(self, context):
         layout = self.layout
         
-        # Search paths section
+        # Search paths section (FMT-style)
         box = layout.box()
-        box.label(text="Search Paths for Missing Libraries")
+        box.label(text="Default Search Paths for Missing Libraries")
         
-        # Add/remove search paths
+        # Add button - right-justified
         row = box.row()
-        row.operator("dynamiclink.add_search_path", text="Add Search Path", icon='ADD')
-        row.operator("dynamiclink.remove_search_path", text="Remove Selected", icon='REMOVE')
+        row.alignment = 'RIGHT'
+        row.operator("dlm.add_search_path", text="Add search path", icon='ADD')
         
-        # List search paths
+        # List search paths (FMT-style)
         for i, path_item in enumerate(self.search_paths):
             row = box.row()
-            row.prop(path_item, "path", text=f"Path {i+1}")
-            row.operator("dynamiclink.remove_search_path", text="", icon='X').index = i
+            row.prop(path_item, "path", text=f"Search path {i+1}")
+            # Folder icon for browsing (FMT-style)
+            row.operator("dlm.browse_search_path", text="", icon='FILE_FOLDER').index = i
+            # Remove button (FMT-style)
+            row.operator("dlm.remove_search_path", text="", icon='REMOVE').index = i
 
 class DYNAMICLINK_PT_main_panel(Panel):
     bl_space_type = 'VIEW_3D'
@@ -129,7 +125,7 @@ class DYNAMICLINK_PT_main_panel(Panel):
         box = layout.box()
         box.label(text="Linked Libraries Analysis")
         row = box.row()
-        row.operator("dynamiclink.scan_linked_assets", text="Scan Linked Assets", icon='FILE_REFRESH')
+        row.operator("dlm.scan_linked_assets", text="Scan Linked Assets", icon='FILE_REFRESH')
         row.label(text=f"({props.linked_assets_count} libraries)")
         
         # Show more detailed info if we have results
@@ -156,12 +152,12 @@ class DYNAMICLINK_PT_main_panel(Panel):
                 row.scale_x = 0.3
                 if props.linked_libraries and 0 <= props.linked_libraries_index < len(props.linked_libraries):
                     selected_lib = props.linked_libraries[props.linked_libraries_index]
-                    open_op = row.operator("dynamiclink.open_linked_file", text="Open Selected", icon='FILE_BLEND')
+                    open_op = row.operator("dlm.open_linked_file", text="Open Selected", icon='FILE_BLEND')
                     open_op.filepath = selected_lib.filepath
                 else:
-                    row.operator("dynamiclink.open_linked_file", text="Open Selected", icon='FILE_BLEND')
+                    row.operator("dlm.open_linked_file", text="Open Selected", icon='FILE_BLEND')
                 row.scale_x = 0.7
-                row.operator("dynamiclink.scan_linked_assets", text="Refresh", icon='FILE_REFRESH')
+                row.operator("dlm.scan_linked_assets", text="Refresh", icon='FILE_REFRESH')
                 
                 # Show details of selected item (FMT-style info display)
                 if props.linked_libraries and 0 <= props.linked_libraries_index < len(props.linked_libraries):
@@ -177,6 +173,32 @@ class DYNAMICLINK_PT_main_panel(Panel):
                         info_box.label(text="Status: OK", icon='FILE_BLEND')
                     
                     info_box.label(text=f"Path: {selected_lib.filepath}", icon='FILE_FOLDER')
+                
+                # Search Paths Management (FMT-style) - integrated into Linked Libraries Analysis
+                if props.linked_assets_count > 0:
+                    # Get preferences for search paths
+                    prefs = context.preferences.addons.get(__package__)
+                    
+                    # Search paths list (FMT-style) - Each path gets its own row with folder icon
+                    if prefs and prefs.preferences.search_paths:
+                        for i, path_item in enumerate(prefs.preferences.search_paths):
+                            row = box.row()
+                            row.prop(path_item, "path", text=f"Search path {i+1}")
+                            # Folder icon for browsing (FMT-style)
+                            row.operator("dlm.browse_search_path", text="", icon='FILE_FOLDER').index = i
+                            # Remove button (FMT-style)
+                            row.operator("dlm.remove_search_path", text="", icon='REMOVE').index = i
+                    
+                    # Add button (FMT-style) - Just the + button, right-justified
+                    row = box.row()
+                    row.alignment = 'RIGHT'
+                    row.operator("dlm.add_search_path", text="", icon='ADD')
+                    
+                    # Main action button (FMT-style)
+                    missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)
+                    if missing_count > 0:
+                        row = box.row()
+                        row.operator("dlm.fmt_style_find", text="Find libraries in these folders", icon='VIEWZOOM')
         
         # Asset replacement section (FMT-style)
         box = layout.box()
@@ -190,84 +212,21 @@ class DYNAMICLINK_PT_main_panel(Panel):
             if obj.library:
                 box.label(text=f"Linked from: {obj.library.filepath}")
                 row = box.row()
-                row.operator("dynamiclink.replace_linked_asset", text="Replace Asset")
+                row.operator("dlm.replace_linked_asset", text="Replace Asset")
             # Check if object's data is linked
             elif obj.data and obj.data.library:
                 box.label(text=f"Data linked from: {obj.data.library.filepath}")
                 row = box.row()
-                row.operator("dynamiclink.replace_linked_asset", text="Replace Asset")
+                row.operator("dlm.replace_linked_asset", text="Replace Asset")
             # Check if it's a linked armature
             elif obj.type == 'ARMATURE' and obj.data and hasattr(obj.data, 'library') and obj.data.library:
                 box.label(text=f"Armature linked from: {obj.data.library.filepath}")
                 row = box.row()
-                row.operator("dynamiclink.replace_linked_asset", text="Replace Asset")
+                row.operator("dlm.replace_linked_asset", text="Replace Asset")
             else:
                 box.label(text="Not a linked asset")
         else:
             box.label(text="No object selected")
-        
-        # Search Paths section (FMT-style)
-        box = layout.box()
-        box.label(text="Search Paths for Missing Libraries")
-        
-        # Get preferences
-        prefs = context.preferences.addons.get(__package__)
-        if prefs:
-            # Show current search paths with FMT-style management
-            if prefs.preferences.search_paths:
-                for i, path_item in enumerate(prefs.preferences.search_paths):
-                    row = box.row()
-                    row.prop(path_item, "path", text=f"Search path {i+1}")
-                    row.operator("dynamiclink.remove_search_path", text="", icon='X').index = i
-            
-            # Add new search path
-            row = box.row()
-            row.operator("dynamiclink.add_search_path", text="Add Search Path", icon='ADD')
-            
-            # FMT-inspired settings
-            if len(prefs.preferences.search_paths) > 0:
-                row = box.row()
-                row.prop(props, "search_different_extensions", text="Search for libraries with different extensions")
-            
-            # Find and relink buttons (FMT-style button layout)
-            if props.linked_assets_count > 0:
-                missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)
-                if missing_count > 0:
-                    row = box.row()
-                    row.operator("dynamiclink.find_in_folders", text="Find libraries in these folders", icon='VIEWZOOM')
-                    row = box.row()
-                    row.operator("dynamiclink.attempt_relink", text="Attempt to relink found libraries", icon='FILE_REFRESH')
-        
-        # FMT-Style Search Paths Management (Direct Copy)
-        box = layout.box()
-        box.label(text="FMT-Style Search Paths")
-        
-        # Get preferences
-        prefs = context.preferences.addons.get(__package__)
-        if prefs:
-            # Extension replacement option (FMT-style)
-            if len(prefs.preferences.search_paths) > 0:
-                row = box.row()
-                row.prop(props, "search_different_extensions", text="Search for libraries with different extensions")
-            
-            # Search paths list (FMT-style)
-            if prefs.preferences.search_paths:
-                for i, path_item in enumerate(prefs.preferences.search_paths):
-                    row = box.row()
-                    row.prop(path_item, "path", text=f"Search path {i+1}")
-                    row.operator("dynamiclink.remove_search_path", text="", icon='REMOVE').index = i
-            
-            # Add/remove buttons (FMT-style)
-            row = box.row()
-            row.operator("dynamiclink.add_search_path", text="Add Search Path", icon='ADD')
-            row.operator("dynamiclink.remove_search_path", text="Remove Selected", icon='REMOVE')
-            
-            # Main action button (FMT-style)
-            if props.linked_assets_count > 0:
-                missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)
-                if missing_count > 0:
-                    row = box.row()
-                    row.operator("dynamiclink.fmt_style_find", text="Find libraries in these folders", icon='VIEWZOOM')
         
         # Settings section (FMT-style)
         box = layout.box()
