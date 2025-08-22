@@ -111,11 +111,15 @@ class DynamicLinkManagerPreferences(AddonPreferences):
             # Remove button (FMT-style)
             row.operator("dlm.remove_search_path", text="", icon='REMOVE').index = i
 
-class DYNAMICLINK_PT_main_panel(Panel):
+class DLM_PT_main_panel(Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = 'Dynamic Link Manager'
-    bl_label = "Asset Replacement"
+    bl_label = "Dynamic Link Manager"
+    
+    def draw_header(self, context):
+        layout = self.layout
+        layout.operator("preferences.addon_show", text="", icon='PREFERENCES').module = __package__
     
     def draw(self, context):
         layout = self.layout
@@ -241,7 +245,7 @@ def register():
     bpy.utils.register_class(LinkedLibraryItem)
     bpy.utils.register_class(DynamicLinkManagerProperties)
     bpy.utils.register_class(DynamicLinkManagerPreferences)
-    bpy.utils.register_class(DYNAMICLINK_PT_main_panel)
+    bpy.utils.register_class(DLM_PT_main_panel)
     
     # Register properties to scene
     bpy.types.Scene.dynamic_link_manager = bpy.props.PointerProperty(type=DynamicLinkManagerProperties)
@@ -250,7 +254,7 @@ def unregister():
     # Unregister properties from scene
     del bpy.types.Scene.dynamic_link_manager
     
-    bpy.utils.unregister_class(DYNAMICLINK_PT_main_panel)
+    bpy.utils.unregister_class(DLM_PT_main_panel)
     bpy.utils.unregister_class(DynamicLinkManagerPreferences)
     bpy.utils.unregister_class(DynamicLinkManagerProperties)
     bpy.utils.unregister_class(LinkedLibraryItem)
