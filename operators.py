@@ -101,6 +101,76 @@ class DLM_OT_scan_linked_assets(Operator):
                 return "Unknown"
             return os.path.basename(filepath)
         
+        # Helper: naive scan of a .blend file to find referenced library paths
+        def scan_blend_for_missing_indirects(blend_path: str) -> bool:
+            """Return True if the .blend likely references at least one missing
+            library (.blend) path. This uses a conservative byte-string scan that
+            never loads data into Blender and is thus context-free and safe.
+
+            Strategy: look for substrings ending in .blend inside the file bytes
+            and expand left/right to the nearest NUL byte or line break to
+            reconstruct a plausible filesystem path. If any such path does not
+            exist on disk, we consider it an indirect missing dependency.
+            """
+            try:
+                if not blend_path or not os.path.exists(blend_path):
+                    return False
+                with open(blend_path, 'rb') as f:
+                    data = f.read()
+            except Exception:
+                return False
+
+            missing_found = False
+            needle = b'.blend'
+            start = 0
+            max_hits = 100  # safety cap
+            hits = 0
+            data_len = len(data)
+            while True:
+                idx = data.find(needle, start)
+                if idx == -1:
+                    break
+                hits += 1
+                if hits > max_hits:
+                    break
+                # expand left to a separator or NUL
+                left = idx
+                while left > 0 and data[left-1] not in (0, 10, 13):  # not NUL/\n/\r
+                    # allow typical path chars; stop on unlikely byte
+                    if data[left-1] in b'\t':
+                        break
+                    left -= 1
+                    # keep paths bounded
+                    if idx - left > 512:
+                        break
+                # expand right a little (after .blend there should be NUL/space)
+                right = idx + len(needle)
+                while right < data_len and data[right] not in (0, 10, 13):
+                    if data[right] in b' \t':
+                        break
+                    right += 1
+                    if right - idx > 512:
+                        break
+                try:
+                    raw = data[left:right]
+                    # decode best-effort
+                    s = raw.decode('utf-8', errors='ignore')
+                    # heuristic: must contain a slash or backslash to be a path
+                    if ('/' in s) or ('\\' in s):
+                        # trim any trailing quotes/spaces
+                        s = s.strip().strip('"\'')
+                        # relative paths are considered unknown; skip
+                        if s.startswith('//'):
+                            pass
+                        else:
+                            if not os.path.exists(s):
+                                missing_found = True
+                                break
+                except Exception:
+                    pass
+                start = idx + len(needle)
+            return missing_found
+
         # Scan all data collections for linked items
         all_libraries = set()
         
@@ -144,38 +214,31 @@ class DLM_OT_scan_linked_assets(Operator):
         # Store results in scene properties
         context.scene.dynamic_link_manager.linked_assets_count = len(all_libraries)
         
-        # Create library items for the UI with better indirect detection
+        # Create library items for the UI, and compute parent-indirect status
+        # Rule: A library is flagged 'indirect' ONLY if it has at least one
+        # missing indirect dependency.
         library_items = []
         for filepath in sorted(all_libraries):
-            if filepath:
-                lib_item = context.scene.dynamic_link_manager.linked_libraries.add()
-                lib_item.filepath = filepath
-                lib_item.name = get_library_name(filepath)
-                lib_item.is_missing = is_file_missing(filepath)
-                
-                # Better indirect link detection
-                # A library is indirect if it's linked from within another linked library
-                is_indirect = False
-                
-                # Check if this library filepath appears in any other library's linked datablocks
-                for other_lib in all_libraries:
-                    if other_lib != filepath:  # Don't check against self
-                        # Look for datablocks that are linked from this other library
-                        for obj in bpy.data.objects:
-                            if (hasattr(obj, 'library') and obj.library and 
-                                obj.library.filepath == other_lib and
-                                hasattr(obj, 'data') and obj.data and
-                                hasattr(obj.data, 'library') and obj.data.library and
-                                obj.data.library.filepath == filepath):
-                                is_indirect = True
-                                break
-                        if is_indirect:
-                            break
-                
-                lib_item.is_indirect = is_indirect
-                
-                # Store for sorting
-                library_items.append((lib_item, filepath))
+            if not filepath:
+                continue
+            lib_item = context.scene.dynamic_link_manager.linked_libraries.add()
+            lib_item.filepath = filepath
+            lib_item.name = get_library_name(filepath)
+            lib_item.is_missing = is_file_missing(filepath)
+
+            # Determine if this library should be marked indirect because it
+            # appears to reference at least one missing child library.
+            is_indirect_due_to_missing_child = False
+            try:
+                abspath = bpy.path.abspath(filepath) if filepath else filepath
+                is_indirect_due_to_missing_child = scan_blend_for_missing_indirects(abspath)
+            except Exception:
+                is_indirect_due_to_missing_child = False
+
+            lib_item.is_indirect = bool(is_indirect_due_to_missing_child)
+
+            # Store for sorting
+            library_items.append((lib_item, filepath))
         
         # Sort libraries: missing first, then by name
         library_items.sort(key=lambda x: (not x[0].is_missing, get_library_name(x[1]).lower()))
