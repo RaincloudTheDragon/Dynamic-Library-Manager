@@ -34,12 +34,25 @@ class DYNAMICLINK_UL_library_list(UIList):
             else:
                 layout.label(text="OK", icon='FILE_BLEND')
             
-            # File path (FMT-style truncated)
+            # File path (abbreviated)
             layout.scale_x = 0.3
             path_text = item.filepath
-            if len(path_text) > 30:
-                path_text = "..." + path_text[-27:]
-            layout.label(text=path_text, icon='FILE_FOLDER')
+            if path_text.startswith("\\\\"):
+                # Network path: show server name
+                parts = path_text.split("\\")
+                if len(parts) >= 3:
+                    short_path = f"\\\\{parts[2]}\\"
+                else:
+                    short_path = "\\\\ (network)"
+            elif len(path_text) >= 2 and path_text[1] == ':':
+                # Drive path: show drive letter
+                short_path = f"{path_text[:2]}\\"
+            elif path_text.startswith("//"):
+                # Relative path
+                short_path = "// (relative)"
+            else:
+                short_path = path_text[:15] + "..." if len(path_text) > 15 else path_text
+            layout.label(text=short_path, icon='FILE_FOLDER')
             
         elif self.layout_type in {'GRID'}:
             layout.alignment = 'CENTER'
@@ -116,6 +129,37 @@ class DLM_PT_main_panel(Panel):
     bl_region_type = 'UI'
     bl_category = 'Dynamic Link Manager'
     bl_label = "Dynamic Link Manager"
+    
+    def get_short_path(self, filepath):
+        """Extract a short, readable path from a full filepath"""
+        if not filepath:
+            return "Unknown"
+        
+        # Handle relative paths
+        if filepath.startswith("//"):
+            return "// (relative)"
+        
+        # Handle Windows network paths
+        if filepath.startswith("\\\\"):
+            # Extract server name (e.g., \\NAS\ or \\NEXUS\)
+            parts = filepath.split("\\")
+            if len(parts) >= 3:
+                return f"\\\\{parts[2]}\\"
+            return "\\\\ (network)"
+        
+        # Handle Windows drive paths
+        if len(filepath) >= 2 and filepath[1] == ':':
+            return f"{filepath[:2]}\\"
+        
+        # Handle Unix-style paths
+        if filepath.startswith("/"):
+            parts = filepath.split("/")
+            if len(parts) >= 2:
+                return f"/{parts[1]}/"
+            return "/ (root)"
+        
+        # Fallback
+        return "Unknown"
     
     def draw_header(self, context):
         layout = self.layout
@@ -202,7 +246,10 @@ class DLM_PT_main_panel(Panel):
                     else:
                         info_box.label(text="Status: OK", icon='FILE_BLEND')
                     
-                    # Replace path display with Open Blend button
+                    # Show full path and Open Blend button
+                    row = info_box.row()
+                    row.label(text=f"Path: {selected_lib.filepath}", icon='FILE_FOLDER')
+
                     row = info_box.row()
                     row.operator("dlm.open_linked_file", text="Open Blend", icon='FILE_BLEND').filepath = selected_lib.filepath
         
