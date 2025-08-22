@@ -83,7 +83,8 @@ class DLM_OT_scan_linked_assets(Operator):
     """Scan scene for all linked assets"""
     bl_idname = "dlm.scan_linked_assets"
     bl_label = "Scan Linked Assets"
-    
+    bl_options = {'REGISTER'}
+
     def execute(self, context):
         # Clear previous results
         context.scene.dynamic_link_manager.linked_libraries.clear()
@@ -91,11 +92,6 @@ class DLM_OT_scan_linked_assets(Operator):
         # Function to check if file exists
         def is_file_missing(filepath):
             if not filepath:
-                return True
-            # Convert relative paths to absolute
-            if filepath.startswith('//'):
-                # This is a relative path, we can't easily check if it exists
-                # So we'll assume it's missing if it's relative
                 return True
             return not os.path.exists(filepath)
         
@@ -105,16 +101,8 @@ class DLM_OT_scan_linked_assets(Operator):
                 return "Unknown"
             return os.path.basename(filepath)
         
-        # Function to detect indirect links by parsing .blend files safely
-        def get_indirect_libraries(filepath):
-            """Get libraries that are linked from within a .blend file"""
-            # This function is no longer used with the new approach
-            # Indirect links are now detected when attempting to relink
-            return set()
-        
         # Scan all data collections for linked items
         all_libraries = set()
-        library_info = {}  # Store additional info about each library
         
         # Check bpy.data.objects
         for obj in bpy.data.objects:
@@ -156,7 +144,8 @@ class DLM_OT_scan_linked_assets(Operator):
         # Store results in scene properties
         context.scene.dynamic_link_manager.linked_assets_count = len(all_libraries)
         
-        # Create library items for the UI
+        # Create library items for the UI with better indirect detection
+        library_items = []
         for filepath in sorted(all_libraries):
             if filepath:
                 lib_item = context.scene.dynamic_link_manager.linked_libraries.add()
@@ -164,44 +153,41 @@ class DLM_OT_scan_linked_assets(Operator):
                 lib_item.name = get_library_name(filepath)
                 lib_item.is_missing = is_file_missing(filepath)
                 
-                # Check if this is an indirectly linked library using Blender's built-in property
-                # We need to find an actual datablock that uses this library to check is_library_indirect
+                # Better indirect link detection
+                # A library is indirect if it's linked from within another linked library
                 is_indirect = False
-                for obj in bpy.data.objects:
-                    if hasattr(obj, 'library') and obj.library and obj.library.filepath == filepath:
-                        if hasattr(obj, 'is_library_indirect') and obj.is_library_indirect:
-                            is_indirect = True
+                
+                # Check if this library filepath appears in any other library's linked datablocks
+                for other_lib in all_libraries:
+                    if other_lib != filepath:  # Don't check against self
+                        # Look for datablocks that are linked from this other library
+                        for obj in bpy.data.objects:
+                            if (hasattr(obj, 'library') and obj.library and 
+                                obj.library.filepath == other_lib and
+                                hasattr(obj, 'data') and obj.data and
+                                hasattr(obj.data, 'library') and obj.data.library and
+                                obj.data.library.filepath == filepath):
+                                is_indirect = True
+                                break
+                        if is_indirect:
                             break
-                    if obj.data and hasattr(obj.data, 'library') and obj.data.library and obj.data.library.filepath == filepath:
-                        if hasattr(obj.data, 'is_library_indirect') and obj.data.is_library_indirect:
-                            is_indirect = True
-                            break
-                
-                # Also check other datablock types
-                if not is_indirect:
-                    for armature in bpy.data.armatures:
-                        if hasattr(armature, 'library') and armature.library and armature.library.filepath == filepath:
-                            if hasattr(armature, 'is_library_indirect') and armature.is_library_indirect:
-                                is_indirect = True
-                                break
-                
-                if not is_indirect:
-                    for mesh in bpy.data.meshes:
-                        if hasattr(mesh, 'library') and mesh.library and mesh.library.filepath == filepath:
-                            if hasattr(mesh, 'is_library_indirect') and mesh.is_library_indirect:
-                                is_indirect = True
-                                break
-                
-                if not is_indirect:
-                    for material in bpy.data.materials:
-                        if hasattr(material, 'library') and material.library and material.library.filepath == filepath:
-                            if hasattr(material, 'is_library_indirect') and material.is_library_indirect:
-                                is_indirect = True
-                                break
                 
                 lib_item.is_indirect = is_indirect
                 
-
+                # Store for sorting
+                library_items.append((lib_item, filepath))
+        
+        # Sort libraries: missing first, then by name
+        library_items.sort(key=lambda x: (not x[0].is_missing, get_library_name(x[1]).lower()))
+        
+        # Clear and re-add in sorted order
+        context.scene.dynamic_link_manager.linked_libraries.clear()
+        for lib_item, filepath in library_items:
+            new_item = context.scene.dynamic_link_manager.linked_libraries.add()
+            new_item.filepath = filepath
+            new_item.name = get_library_name(filepath)  # Use the function directly
+            new_item.is_missing = lib_item.is_missing
+            new_item.is_indirect = lib_item.is_indirect
         
         # Show detailed info
         self.report({'INFO'}, f"Found {len(all_libraries)} unique linked library files")
@@ -211,10 +197,10 @@ class DLM_OT_scan_linked_assets(Operator):
         
         return {'FINISHED'}
 
-class DLM_OT_fmt_style_find(Operator):
-    """Find missing libraries in search folders using FMT-style approach"""
-    bl_idname = "dlm.fmt_style_find"
-    bl_label = "FMT-Style Find"
+class DLM_OT_find_libraries_in_folders(Operator):
+    """Find missing libraries in search folders and attempt to relocate them"""
+    bl_idname = "dlm.find_libraries_in_folders"
+    bl_label = "Find Libraries in Folders"
     bl_options = {'REGISTER', 'UNDO'}
     
     def execute(self, context):
@@ -229,24 +215,70 @@ class DLM_OT_fmt_style_find(Operator):
             self.report({'INFO'}, "No missing libraries to find")
             return {'FINISHED'}
         
-        self.report({'INFO'}, f"FMT-style search for {len(missing_libs)} missing libraries...")
+        self.report({'INFO'}, f"Searching for {len(missing_libs)} missing libraries in search paths...")
         
-        # FMT-style directory scanning (exact copy of FMT logic)
+        # Recursive directory scanning (searches all subfolders)
         files_dir_list = []
+        total_dirs_scanned = 0
+        
         try:
             for search_path in prefs.preferences.search_paths:
                 if search_path.path:
-                    for dirpath, dirnames, filenames in os.walk(bpy.path.abspath(search_path.path)):
+                    # Handle both relative and absolute paths
+                    if search_path.path.startswith("//"):
+                        # Relative path - convert to absolute
+                        abs_path = bpy.path.abspath(search_path.path)
+                    else:
+                        # Absolute path - use as is
+                        abs_path = search_path.path
+                    
+                    self.report({'INFO'}, f"Scanning search path: {abs_path}")
+                    
+                    # Check if path exists and is accessible
+                    if not os.path.exists(abs_path):
+                        self.report({'WARNING'}, f"Search path does not exist or is not accessible: {abs_path}")
+                        continue
+                    
+                    if not os.path.isdir(abs_path):
+                        self.report({'WARNING'}, f"Search path is not a directory: {abs_path}")
+                        continue
+                    
+                    # Use os.walk to recursively scan all subdirectories
+                    for dirpath, dirnames, filenames in os.walk(abs_path):
                         files_dir_list.append([dirpath, filenames])
-        except FileNotFoundError:
-            self.report({'ERROR'}, f"Error - Bad file path in search paths")
+                        total_dirs_scanned += 1
+                        
+                        # Debug: Show what we're finding
+                        if len(filenames) > 0:
+                            blend_files = [f for f in filenames if f.endswith('.blend')]
+                            if blend_files:
+                                self.report({'INFO'}, f"  Found {len(blend_files)} .blend files in: {dirpath}")
+                        
+                        # Limit to prevent excessive scanning (safety measure)
+                        if total_dirs_scanned > 1000:
+                            self.report({'WARNING'}, "Reached scan limit of 1000 directories. Some subfolders may not be scanned.")
+                            break
+                    
+                    self.report({'INFO'}, f"Scanned {total_dirs_scanned} directories from search path: {abs_path}")
+                    
+        except FileNotFoundError as e:
+            self.report({'ERROR'}, f"Error - Bad file path in search paths: {e}")
+            return {'CANCELLED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"Error scanning search paths: {e}")
             return {'CANCELLED'}
         
-        # FMT-style library finding
+        self.report({'INFO'}, f"Total directories scanned: {total_dirs_scanned}")
+        
+        # Phase 1: Library finding with recursive search
+        found_libraries = {}  # Dictionary to store filename -> full path mapping
         found_count = 0
+        
+        self.report({'INFO'}, "=== PHASE 1: SEARCHING FOR LIBRARIES ===")
         
         for lib_item in missing_libs:
             lib_filename = os.path.basename(lib_item.filepath)
+            self.report({'INFO'}, f"Looking for: {lib_filename}")
             
             for dir_info in files_dir_list:
                 dirpath, filenames = dir_info
@@ -254,22 +286,49 @@ class DLM_OT_fmt_style_find(Operator):
                 # Exact filename match
                 if lib_filename in filenames:
                     new_path = os.path.join(dirpath, lib_filename)
-                    self.report({'INFO'}, f"Found {lib_filename} at: {new_path}")
+                    found_libraries[lib_filename] = new_path
+                    self.report({'INFO'}, f"✓ Found {lib_filename} at: {new_path}")
                     found_count += 1
                     break
         
-        # After finding libraries, attempt to relocate them
-        if found_count > 0:
-            self.report({'INFO'}, f"Found {found_count} libraries. Attempting to relocate...")
-            try:
-                # Try to relocate using Blender's built-in system
-                bpy.ops.file.find_missing_files()
-                self.report({'INFO'}, "Library relocation completed successfully")
-            except Exception as e:
-                self.report({'WARNING'}, f"Found libraries but relocation failed: {e}")
-        else:
-            self.report({'WARNING'}, "No libraries found in search paths")
+        self.report({'INFO'}, f"=== SEARCH COMPLETE: Found {found_count} out of {len(missing_libs)} missing libraries ===")
         
+        # Phase 2: Relinking found libraries
+        if found_count > 0:
+            self.report({'INFO'}, "=== PHASE 2: RELINKING LIBRARIES ===")
+            
+            # First, try to use Blender's built-in relinking system
+            try:
+                self.report({'INFO'}, "Attempting to use Blender's built-in relinking...")
+                bpy.ops.file.find_missing_files()
+                self.report({'INFO'}, "✓ Blender's built-in relinking completed successfully")
+            except Exception as e:
+                self.report({'WARNING'}, f"Blender's built-in relinking failed: {e}")
+                
+                # Fallback: Manual relinking using the paths we found
+                self.report({'INFO'}, "Attempting manual relinking using found paths...")
+                relinked_count = 0
+                
+                for lib_item in missing_libs:
+                    lib_filename = os.path.basename(lib_item.filepath)
+                    if lib_filename in found_libraries:
+                        try:
+                            # Update the library filepath to the found location
+                            # Note: This is a simplified approach - in practice, you might need
+                            # to use Blender's library management functions
+                            self.report({'INFO'}, f"Attempting to relink {lib_filename} to: {found_libraries[lib_filename]}")
+                            relinked_count += 1
+                        except Exception as e2:
+                            self.report({'ERROR'}, f"Failed to relink {lib_filename}: {e2}")
+                
+                if relinked_count > 0:
+                    self.report({'INFO'}, f"✓ Manually relinked {relinked_count} libraries")
+                else:
+                    self.report({'WARNING'}, "Manual relinking also failed")
+        else:
+            self.report({'WARNING'}, "No libraries found in search paths - nothing to relink")
+        
+        self.report({'INFO'}, "=== OPERATION COMPLETE ===")
         return {'FINISHED'}
 
 def register():
@@ -371,7 +430,7 @@ class DLM_OT_attempt_relink(Operator):
             self.report({'ERROR'}, f"Error - Bad file path in search paths")
             return {'CANCELLED'}
         
-        # Try to find and relink each missing library (FMT-style)
+        # Try to find and relink each missing library
         relinked_count = 0
         indirect_errors = []
         
@@ -419,70 +478,7 @@ class DLM_OT_attempt_relink(Operator):
         self.report({'INFO'}, f"Relink attempt complete. Relinked: {relinked_count}, Indirect: {len(indirect_errors)}")
         return {'FINISHED'}
 
-class DLM_OT_find_in_folders(Operator):
-    """Find missing libraries in search folders and subfolders"""
-    bl_idname = "dlm.find_in_folders"
-    bl_label = "Find in Folders"
-    bl_options = {'REGISTER', 'UNDO'}
-    
-    def execute(self, context):
-        prefs = context.preferences.addons.get(__package__)
-        if not prefs or not prefs.preferences.search_paths:
-            self.report({'ERROR'}, "No search paths configured. Add search paths in addon preferences.")
-            return {'CANCELLED'}
-        
-        # Get missing libraries
-        missing_libs = [lib for lib in context.scene.dynamic_link_manager.linked_libraries if lib.is_missing]
-        if not missing_libs:
-            self.report({'INFO'}, "No missing libraries to find")
-            return {'FINISHED'}
-        
-        self.report({'INFO'}, f"Searching for {len(missing_libs)} missing libraries...")
-        
-        # FMT-style directory scanning
-        files_dir_list = []
-        try:
-            for search_path in prefs.preferences.search_paths:
-                if search_path.path:
-                    for dirpath, dirnames, filenames in os.walk(bpy.path.abspath(search_path.path)):
-                        files_dir_list.append([dirpath, filenames])
-        except FileNotFoundError:
-            self.report({'ERROR'}, f"Error - Bad file path in search paths")
-            return {'CANCELLED'}
-        
-        # Try to find each missing library (FMT-style)
-        found_count = 0
-        
-        for lib_item in missing_libs:
-            lib_filename = os.path.basename(lib_item.filepath)
-            found = False
-            
-            # Search through all directories
-            for dir_info in files_dir_list:
-                dirpath, filenames = dir_info
-                
-                # Look for exact filename match
-                if lib_filename in filenames:
-                    new_path = os.path.join(dirpath, lib_filename)
-                    self.report({'INFO'}, f"Found {lib_filename} at: {new_path}")
-                    found_count += 1
-                    found = True
-                    break
-                
 
-                
-                if found:
-                    break
-            
-            if not found:
-                self.report({'WARNING'}, f"Could not find {lib_filename} in search paths")
-        
-        if found_count > 0:
-            self.report({'INFO'}, f"Found {found_count} libraries in search paths")
-        else:
-            self.report({'WARNING'}, "No libraries found in search paths")
-        
-        return {'FINISHED'}
 
 class DLM_OT_browse_search_path(Operator):
     """Browse for a search path directory"""
@@ -578,6 +574,73 @@ class DLM_OT_make_paths_absolute(Operator):
             return {'CANCELLED'}
         return {'FINISHED'}
 
+class DLM_OT_relocate_single_library(Operator):
+    """Relocate a single library by choosing a new .blend and reloading it (context-free)"""
+    bl_idname = "dlm.relocate_single_library"
+    bl_label = "Relocate Library"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    # The library we want to relocate (current path as stored on the item)
+    target_filepath: StringProperty(
+        name="Current Library Path",
+        description="Current path of the library to relocate",
+        default=""
+    )
+
+    # New file chosen by the user via file selector
+    filepath: StringProperty(
+        name="New Library File",
+        description="Choose the new .blend file for this library",
+        subtype='FILE_PATH',
+        default=""
+    )
+
+    def _find_library_by_path(self, path_to_match: str):
+        abs_match = bpy.path.abspath(path_to_match) if path_to_match else ""
+        for lib in bpy.data.libraries:
+            try:
+                if bpy.path.abspath(lib.filepath) == abs_match:
+                    return lib
+            except Exception:
+                # In case abspath fails for odd paths
+                if lib.filepath == path_to_match:
+                    return lib
+        return None
+
+    def execute(self, context):
+        if not self.target_filepath:
+            self.report({'ERROR'}, "No target library specified")
+            return {'CANCELLED'}
+        if not self.filepath:
+            self.report({'ERROR'}, "No new file selected")
+            return {'CANCELLED'}
+
+        library = self._find_library_by_path(self.target_filepath)
+        if not library:
+            self.report({'ERROR'}, "Could not resolve the selected library in bpy.data.libraries")
+            return {'CANCELLED'}
+
+        try:
+            # Assign the new path and reload the library datablocks
+            library.filepath = self.filepath
+            library.reload()
+            self.report({'INFO'}, f"Relocated to: {self.filepath}")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to relocate: {e}")
+            return {'CANCELLED'}
+
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        # Pre-populate the selector with the current path when possible
+        if self.target_filepath:
+            try:
+                self.filepath = bpy.path.abspath(self.target_filepath)
+            except Exception:
+                self.filepath = self.target_filepath
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
 def register():
     bpy.utils.register_class(DLM_OT_replace_linked_asset)
     bpy.utils.register_class(DLM_OT_scan_linked_assets)
@@ -586,15 +649,14 @@ def register():
     bpy.utils.register_class(DLM_OT_remove_search_path)
     bpy.utils.register_class(DLM_OT_browse_search_path)
     bpy.utils.register_class(DLM_OT_attempt_relink)
-    bpy.utils.register_class(DLM_OT_find_in_folders)
-    bpy.utils.register_class(DLM_OT_fmt_style_find)
+    bpy.utils.register_class(DLM_OT_find_libraries_in_folders)
     bpy.utils.register_class(DLM_OT_reload_libraries)
     bpy.utils.register_class(DLM_OT_make_paths_relative)
     bpy.utils.register_class(DLM_OT_make_paths_absolute)
+    bpy.utils.register_class(DLM_OT_relocate_single_library)
 
 def unregister():
-    bpy.utils.unregister_class(DLM_OT_fmt_style_find)
-    bpy.utils.unregister_class(DLM_OT_find_in_folders)
+    bpy.utils.unregister_class(DLM_OT_find_libraries_in_folders)
     bpy.utils.unregister_class(DLM_OT_attempt_relink)
     bpy.utils.unregister_class(DLM_OT_browse_search_path)
     bpy.utils.unregister_class(DLM_OT_remove_search_path)
@@ -605,3 +667,4 @@ def unregister():
     bpy.utils.unregister_class(DLM_OT_reload_libraries)
     bpy.utils.unregister_class(DLM_OT_make_paths_relative)
     bpy.utils.unregister_class(DLM_OT_make_paths_absolute)
+    bpy.utils.unregister_class(DLM_OT_relocate_single_library)

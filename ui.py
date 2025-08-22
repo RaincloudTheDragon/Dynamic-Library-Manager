@@ -15,13 +15,13 @@ class LinkedDatablockItem(PropertyGroup):
     name: StringProperty(name="Name", description="Name of the linked datablock")
     type: StringProperty(name="Type", description="Type of the linked datablock")
 
-# FMT-style UIList for linked libraries
-class DYNAMICLINK_UL_library_list(UIList):
+# UIList for linked libraries
+class DLM_UL_library_list(UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         custom_icon = 'FILE_BLEND'
         
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
-            # Library name and status (FMT-style layout)
+            # Library name and status
             layout.scale_x = 0.4
             layout.label(text=item.name)
             
@@ -105,7 +105,7 @@ class DynamicLinkManagerPreferences(AddonPreferences):
     def draw(self, context):
         layout = self.layout
         
-        # Search paths section (FMT-style)
+                        # Search paths section
         box = layout.box()
         box.label(text="Default Search Paths for Missing Libraries")
         
@@ -114,13 +114,13 @@ class DynamicLinkManagerPreferences(AddonPreferences):
         row.alignment = 'RIGHT'
         row.operator("dlm.add_search_path", text="Add search path", icon='ADD')
         
-        # List search paths (FMT-style)
+                            # List search paths
         for i, path_item in enumerate(self.search_paths):
             row = box.row()
             row.prop(path_item, "path", text=f"Search path {i+1}")
-            # Folder icon for browsing (FMT-style)
+            # Folder icon for browsing
             row.operator("dlm.browse_search_path", text="", icon='FILE_FOLDER').index = i
-            # Remove button (FMT-style)
+            # Remove button
             row.operator("dlm.remove_search_path", text="", icon='REMOVE').index = i
 
 class DLM_PT_main_panel(Panel):
@@ -178,7 +178,13 @@ class DLM_PT_main_panel(Panel):
         box.label(text="Linked Libraries Analysis")
         row = box.row()
         row.operator("dlm.scan_linked_assets", text="Scan Linked Assets", icon='FILE_REFRESH')
-        row.label(text=f"({props.linked_assets_count} libraries)")
+        
+        # Show total count and missing count
+        missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)
+        if missing_count > 0:
+            row.label(text=f"({props.linked_assets_count} libraries, {missing_count} missing)", icon='ERROR')
+        else:
+            row.label(text=f"({props.linked_assets_count} libraries)")
         
         # Show more detailed info if we have results
         if props.linked_assets_count > 0:
@@ -197,7 +203,7 @@ class DLM_PT_main_panel(Panel):
             if props.linked_libraries_expanded:
                 # Compact list view
                 row = box.row()
-                row.template_list("DYNAMICLINK_UL_library_list", "", props, "linked_libraries", props, "linked_libraries_index")
+                row.template_list("DLM_UL_library_list", "", props, "linked_libraries", props, "linked_libraries_index")
                 
                 # Action buttons below the list
                 row = box.row()
@@ -224,10 +230,9 @@ class DLM_PT_main_panel(Panel):
                     row.operator("dlm.add_search_path", text="Add search path", icon='ADD')
                     
                     # Main action button
-                    missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)
                     if missing_count > 0:
                         row = box.row()
-                        row.operator("dlm.fmt_style_find", text="Find libraries in these folders", icon='VIEWZOOM')
+                        row.operator("dlm.find_libraries_in_folders", text="Find libraries in these folders", icon='VIEWZOOM')
                 
                 # Show details of selected item at the bottom
                 if props.linked_libraries and 0 <= props.linked_libraries_index < len(props.linked_libraries):
@@ -256,41 +261,18 @@ class DLM_PT_main_panel(Panel):
 
                     row = info_box.row()
                     row.operator("dlm.open_linked_file", text="Open Blend", icon='FILE_BLEND').filepath = selected_lib.filepath
-        
-        # Asset replacement section
-        box = layout.box()
-        box.label(text="Asset Replacement")
-        
-        obj = context.active_object
-        if obj:
-            box.label(text=f"Selected: {obj.name}")
-            
-            # Check if object itself is linked
-            if obj.library:
-                box.label(text=f"Linked from: {obj.library.filepath}")
-                row = box.row()
-                row.operator("dlm.replace_linked_asset", text="Replace Asset")
-            # Check if object's data is linked
-            elif obj.data and obj.data.library:
-                box.label(text=f"Data linked from: {obj.data.library.filepath}")
-                row = box.row()
-                row.operator("dlm.replace_linked_asset", text="Replace Asset")
-            # Check if it's a linked armature
-            elif obj.type == 'ARMATURE' and obj.data and hasattr(obj.data, 'library') and obj.data.library:
-                box.label(text=f"Armature linked from: {obj.data.library.filepath}")
-                row = box.row()
-                row.operator("dlm.replace_linked_asset", text="Replace Asset")
-            else:
-                box.label(text="Not a linked asset")
-        else:
-            box.label(text="No object selected")
-        
+
+                    # Relocate (context-free): lets the user pick a new .blend and we reload the library
+                    row = info_box.row()
+                    op = row.operator("dlm.relocate_single_library", text="Relocate Library", icon='FILE_FOLDER')
+                    op.target_filepath = selected_lib.filepath
+                    
 
 
 def register():
     bpy.utils.register_class(SearchPathItem)
     bpy.utils.register_class(LinkedDatablockItem)
-    bpy.utils.register_class(DYNAMICLINK_UL_library_list)
+    bpy.utils.register_class(DLM_UL_library_list)
     bpy.utils.register_class(LinkedLibraryItem)
     bpy.utils.register_class(DynamicLinkManagerProperties)
     bpy.utils.register_class(DynamicLinkManagerPreferences)
@@ -307,6 +289,6 @@ def unregister():
     bpy.utils.unregister_class(DynamicLinkManagerPreferences)
     bpy.utils.unregister_class(DynamicLinkManagerProperties)
     bpy.utils.unregister_class(LinkedLibraryItem)
-    bpy.utils.unregister_class(DYNAMICLINK_UL_library_list)
+    bpy.utils.unregister_class(DLM_UL_library_list)
     bpy.utils.unregister_class(LinkedDatablockItem)
     bpy.utils.unregister_class(SearchPathItem)
