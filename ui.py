@@ -163,21 +163,6 @@ class DLM_PT_main_panel(Panel):
                 row.scale_x = 0.7
                 row.operator("dlm.reload_libraries", text="Reload Libraries", icon='FILE_REFRESH')
                 
-                # Show details of selected item
-                if props.linked_libraries and 0 <= props.linked_libraries_index < len(props.linked_libraries):
-                    selected_lib = props.linked_libraries[props.linked_libraries_index]
-                    info_box = box.box()
-                    info_box.label(text=f"Selected: {selected_lib.name}")
-                    
-                    if selected_lib.is_missing:
-                        info_box.label(text="Status: MISSING", icon='ERROR')
-                    elif selected_lib.has_indirect_missing:
-                        info_box.label(text=f"Status: INDIRECT MISSING ({selected_lib.indirect_missing_count} dependencies)", icon='ERROR')
-                    else:
-                        info_box.label(text="Status: OK", icon='FILE_BLEND')
-                    
-                    info_box.label(text=f"Path: {selected_lib.filepath}", icon='FILE_FOLDER')
-                
                 # Search Paths Management - integrated into Linked Libraries Analysis
                 if props.linked_assets_count > 0:
                     # Get preferences for search paths
@@ -198,12 +183,28 @@ class DLM_PT_main_panel(Panel):
                     row.alignment = 'RIGHT'
                     row.operator("dlm.add_search_path", text="", icon='ADD')
                     
-                    # Main action buttons
+                    # Main action button
                     missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)
                     if missing_count > 0:
                         row = box.row()
                         row.operator("dlm.fmt_style_find", text="Find libraries in these folders", icon='VIEWZOOM')
-                        row.operator("dlm.relocate_libraries", text="Relocate Libraries", icon='FILE_REFRESH')
+                
+                # Show details of selected item at the bottom
+                if props.linked_libraries and 0 <= props.linked_libraries_index < len(props.linked_libraries):
+                    selected_lib = props.linked_libraries[props.linked_libraries_index]
+                    info_box = box.box()
+                    info_box.label(text=f"Selected: {selected_lib.name}")
+                    
+                    if selected_lib.is_missing:
+                        info_box.label(text="Status: MISSING", icon='ERROR')
+                    elif selected_lib.has_indirect_missing:
+                        info_box.label(text=f"Status: INDIRECT MISSING ({selected_lib.indirect_missing_count} dependencies)", icon='ERROR')
+                    else:
+                        info_box.label(text="Status: OK", icon='FILE_BLEND')
+                    
+                    # Replace path display with Open Blend button
+                    row = info_box.row()
+                    row.operator("dlm.open_linked_file", text="Open Blend", icon='FILE_BLEND').filepath = selected_lib.filepath
         
         # Asset replacement section
         box = layout.box()
@@ -233,11 +234,7 @@ class DLM_PT_main_panel(Panel):
         else:
             box.label(text="No object selected")
         
-        # Settings section
-        box = layout.box()
-        box.label(text="Settings")
-        row = box.row()
-        row.prop(props, "selected_asset_path", text="Asset Path")
+
 
 def register():
     bpy.utils.register_class(SearchPathItem)
