@@ -125,7 +125,7 @@ class DLM_PT_main_panel(Panel):
         layout = self.layout
         props = context.scene.dynamic_link_manager
         
-        # Main scan section (FMT-style)
+        # Main scan section
         box = layout.box()
         box.label(text="Linked Libraries Analysis")
         row = box.row()
@@ -134,7 +134,7 @@ class DLM_PT_main_panel(Panel):
         
         # Show more detailed info if we have results
         if props.linked_assets_count > 0:
-            # Linked Libraries section with single dropdown (FMT-style)
+            # Linked Libraries section with single dropdown
             row = box.row(align=True)
             
             # Dropdown arrow for the entire section
@@ -147,11 +147,11 @@ class DLM_PT_main_panel(Panel):
             
             # Only show library details if section is expanded
             if props.linked_libraries_expanded:
-                # FMT-style compact list view
+                # Compact list view
                 row = box.row()
                 row.template_list("DYNAMICLINK_UL_library_list", "", props, "linked_libraries", props, "linked_libraries_index")
                 
-                # Action buttons below the list (FMT-style)
+                # Action buttons below the list
                 row = box.row()
                 row.scale_x = 0.3
                 if props.linked_libraries and 0 <= props.linked_libraries_index < len(props.linked_libraries):
@@ -161,9 +161,9 @@ class DLM_PT_main_panel(Panel):
                 else:
                     row.operator("dlm.open_linked_file", text="Open Selected", icon='FILE_BLEND')
                 row.scale_x = 0.7
-                row.operator("dlm.scan_linked_assets", text="Refresh", icon='FILE_REFRESH')
+                row.operator("dlm.reload_libraries", text="Reload Libraries", icon='FILE_REFRESH')
                 
-                # Show details of selected item (FMT-style info display)
+                # Show details of selected item
                 if props.linked_libraries and 0 <= props.linked_libraries_index < len(props.linked_libraries):
                     selected_lib = props.linked_libraries[props.linked_libraries_index]
                     info_box = box.box()
@@ -178,33 +178,34 @@ class DLM_PT_main_panel(Panel):
                     
                     info_box.label(text=f"Path: {selected_lib.filepath}", icon='FILE_FOLDER')
                 
-                # Search Paths Management (FMT-style) - integrated into Linked Libraries Analysis
+                # Search Paths Management - integrated into Linked Libraries Analysis
                 if props.linked_assets_count > 0:
                     # Get preferences for search paths
                     prefs = context.preferences.addons.get(__package__)
                     
-                    # Search paths list (FMT-style) - Each path gets its own row with folder icon
+                    # Search paths list - Each path gets its own row with folder icon
                     if prefs and prefs.preferences.search_paths:
                         for i, path_item in enumerate(prefs.preferences.search_paths):
                             row = box.row()
                             row.prop(path_item, "path", text=f"Search path {i+1}")
-                            # Folder icon for browsing (FMT-style)
+                            # Folder icon for browsing
                             row.operator("dlm.browse_search_path", text="", icon='FILE_FOLDER').index = i
-                            # Remove button (FMT-style)
+                            # Remove button
                             row.operator("dlm.remove_search_path", text="", icon='REMOVE').index = i
                     
-                    # Add button (FMT-style) - Just the + button, right-justified
+                    # Add button - Just the + button, right-justified
                     row = box.row()
                     row.alignment = 'RIGHT'
                     row.operator("dlm.add_search_path", text="", icon='ADD')
                     
-                    # Main action button (FMT-style)
+                    # Main action buttons
                     missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)
                     if missing_count > 0:
                         row = box.row()
                         row.operator("dlm.fmt_style_find", text="Find libraries in these folders", icon='VIEWZOOM')
+                        row.operator("dlm.relocate_libraries", text="Relocate Libraries", icon='FILE_REFRESH')
         
-        # Asset replacement section (FMT-style)
+        # Asset replacement section
         box = layout.box()
         box.label(text="Asset Replacement")
         
@@ -232,7 +233,7 @@ class DLM_PT_main_panel(Panel):
         else:
             box.label(text="No object selected")
         
-        # Settings section (FMT-style)
+        # Settings section
         box = layout.box()
         box.label(text="Settings")
         row = box.row()

@@ -502,6 +502,38 @@ class DLM_OT_browse_search_path(Operator):
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
 
+class DLM_OT_relocate_libraries(Operator):
+    """Relocate missing libraries using Blender's built-in relocate operation"""
+    bl_idname = "dlm.relocate_libraries"
+    bl_label = "Relocate Libraries"
+    bl_options = {'REGISTER'}
+    
+    def execute(self, context):
+        try:
+            # Use Blender's built-in library relocate operation
+            bpy.ops.outliner.lib_operation(type='RELOCATE')
+            self.report({'INFO'}, "Library relocation operation completed")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to relocate libraries: {e}")
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+class DLM_OT_reload_libraries(Operator):
+    """Reload all libraries using Blender's built-in reload operation"""
+    bl_idname = "dlm.reload_libraries"
+    bl_label = "Reload Libraries"
+    bl_options = {'REGISTER'}
+    
+    def execute(self, context):
+        try:
+            # Use Blender's built-in library reload operation
+            bpy.ops.outliner.lib_operation(type='RELOAD')
+            self.report({'INFO'}, "Library reload operation completed")
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to reload libraries: {e}")
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
 def register():
     bpy.utils.register_class(DLM_OT_replace_linked_asset)
     bpy.utils.register_class(DLM_OT_scan_linked_assets)
@@ -512,6 +544,8 @@ def register():
     bpy.utils.register_class(DLM_OT_attempt_relink)
     bpy.utils.register_class(DLM_OT_find_in_folders)
     bpy.utils.register_class(DLM_OT_fmt_style_find)
+    bpy.utils.register_class(DLM_OT_relocate_libraries)
+    bpy.utils.register_class(DLM_OT_reload_libraries)
 
 def unregister():
     bpy.utils.unregister_class(DLM_OT_fmt_style_find)
@@ -523,3 +557,5 @@ def unregister():
     bpy.utils.unregister_class(DLM_OT_open_linked_file)
     bpy.utils.unregister_class(DLM_OT_scan_linked_assets)
     bpy.utils.unregister_class(DLM_OT_replace_linked_asset)
+    bpy.utils.unregister_class(DLM_OT_relocate_libraries)
+    bpy.utils.unregister_class(DLM_OT_reload_libraries)
