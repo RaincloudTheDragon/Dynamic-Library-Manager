@@ -196,6 +196,71 @@ class DYNAMICLINK_OT_scan_linked_assets(Operator):
         
         return {'FINISHED'}
 
+class DYNAMICLINK_OT_fmt_style_find(Operator):
+    """Find missing libraries in search folders using FMT-style approach"""
+    bl_idname = "dynamiclink.fmt_style_find"
+    bl_label = "FMT-Style Find"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        prefs = context.preferences.addons.get(__package__)
+        if not prefs or not prefs.preferences.search_paths:
+            self.report({'ERROR'}, "No search paths configured. Add search paths in addon preferences.")
+            return {'CANCELLED'}
+        
+        # Get missing libraries
+        missing_libs = [lib for lib in context.scene.dynamic_link_manager.linked_libraries if lib.is_missing]
+        if not missing_libs:
+            self.report({'INFO'}, "No missing libraries to find")
+            return {'FINISHED'}
+        
+        self.report({'INFO'}, f"FMT-style search for {len(missing_libs)} missing libraries...")
+        
+        # FMT-style directory scanning (exact copy of FMT logic)
+        files_dir_list = []
+        try:
+            for search_path in prefs.preferences.search_paths:
+                if search_path.path:
+                    for dirpath, dirnames, filenames in os.walk(bpy.path.abspath(search_path.path)):
+                        files_dir_list.append([dirpath, filenames])
+        except FileNotFoundError:
+            self.report({'ERROR'}, f"Error - Bad file path in search paths")
+            return {'CANCELLED'}
+        
+        # FMT-style library finding
+        found_count = 0
+        
+        for lib_item in missing_libs:
+            lib_filename = os.path.basename(lib_item.filepath)
+            
+            for dir_info in files_dir_list:
+                dirpath, filenames = dir_info
+                
+                # Exact filename match
+                if lib_filename in filenames:
+                    new_path = os.path.join(dirpath, lib_filename)
+                    self.report({'INFO'}, f"Found {lib_filename} at: {new_path}")
+                    found_count += 1
+                    break
+                
+                # Extension replacement (FMT-style)
+                elif context.scene.dynamic_link_manager.search_different_extensions:
+                    base_name = os.path.splitext(lib_filename)[0]
+                    for filename in filenames:
+                        if base_name == os.path.splitext(filename)[0]:
+                            new_path = os.path.join(dirpath, filename)
+                            self.report({'INFO'}, f"Found {lib_filename} (as {filename}) at: {new_path}")
+                            found_count += 1
+                            break
+        
+        # FMT-style reporting
+        if found_count > 0:
+            self.report({'INFO'}, f"FMT-style search complete: Found {found_count} libraries")
+        else:
+            self.report({'WARNING'}, "FMT-style search: No libraries found in search paths")
+        
+        return {'FINISHED'}
+
 def register():
     bpy.utils.register_class(DYNAMICLINK_OT_replace_linked_asset)
     bpy.utils.register_class(DYNAMICLINK_OT_scan_linked_assets)
@@ -305,7 +370,7 @@ class DYNAMICLINK_OT_attempt_relink(Operator):
             self.report({'ERROR'}, f"Error - Bad file path in search paths")
             return {'CANCELLED'}
         
-        # Try to find and relink each missing library
+        # Try to find and relink each missing library (FMT-style)
         relinked_count = 0
         indirect_errors = []
         
@@ -334,6 +399,28 @@ class DYNAMICLINK_OT_attempt_relink(Operator):
                             print(f"Indirect link detected for: {lib_item.filepath}")
                         else:
                             print(f"Error relinking {lib_item.filepath}: {e}")
+                
+                # FMT-style extension replacement
+                if not found and context.scene.dynamic_link_manager.search_different_extensions:
+                    base_name = os.path.splitext(lib_filename)[0]
+                    for filename in filenames:
+                        if base_name == os.path.splitext(filename)[0]:
+                            new_path = os.path.join(dirpath, filename)
+                            try:
+                                bpy.ops.file.find_missing_files()
+                                found = True
+                                relinked_count += 1
+                                break
+                            except Exception as e:
+                                error_msg = str(e)
+                                if "unable to relocate indirectly linked library" in error_msg:
+                                    indirect_errors.append(lib_item.filepath)
+                                    print(f"Indirect link detected for: {lib_item.filepath}")
+                                else:
+                                    print(f"Error relinking {lib_item.filepath}: {e}")
+                
+                if found:
+                    break
             
             if not found:
                 print(f"Could not find {lib_filename} in search paths")
@@ -370,7 +457,7 @@ class DYNAMICLINK_OT_find_in_folders(Operator):
         
         self.report({'INFO'}, f"Searching for {len(missing_libs)} missing libraries...")
         
-        # Scan search paths for missing libraries (FMT-inspired approach)
+        # FMT-style directory scanning
         files_dir_list = []
         try:
             for search_path in prefs.preferences.search_paths:
@@ -381,11 +468,12 @@ class DYNAMICLINK_OT_find_in_folders(Operator):
             self.report({'ERROR'}, f"Error - Bad file path in search paths")
             return {'CANCELLED'}
         
-        # Try to find each missing library
+        # Try to find each missing library (FMT-style)
         found_count = 0
         
         for lib_item in missing_libs:
             lib_filename = os.path.basename(lib_item.filepath)
+            found = False
             
             # Search through all directories
             for dir_info in files_dir_list:
@@ -396,7 +484,25 @@ class DYNAMICLINK_OT_find_in_folders(Operator):
                     new_path = os.path.join(dirpath, lib_filename)
                     self.report({'INFO'}, f"Found {lib_filename} at: {new_path}")
                     found_count += 1
+                    found = True
                     break
+                
+                # FMT-style extension replacement
+                if context.scene.dynamic_link_manager.search_different_extensions:
+                    base_name = os.path.splitext(lib_filename)[0]
+                    for filename in filenames:
+                        if base_name == os.path.splitext(filename)[0]:
+                            new_path = os.path.join(dirpath, filename)
+                            self.report({'INFO'}, f"Found {lib_filename} (as {filename}) at: {new_path}")
+                            found_count += 1
+                            found = True
+                            break
+                
+                if found:
+                    break
+            
+            if not found:
+                self.report({'WARNING'}, f"Could not find {lib_filename} in search paths")
         
         if found_count > 0:
             self.report({'INFO'}, f"Found {found_count} libraries in search paths")
@@ -413,8 +519,10 @@ def register():
     bpy.utils.register_class(DYNAMICLINK_OT_remove_search_path)
     bpy.utils.register_class(DYNAMICLINK_OT_attempt_relink)
     bpy.utils.register_class(DYNAMICLINK_OT_find_in_folders)
+    bpy.utils.register_class(DYNAMICLINK_OT_fmt_style_find)
 
 def unregister():
+    bpy.utils.unregister_class(DYNAMICLINK_OT_fmt_style_find)
     bpy.utils.unregister_class(DYNAMICLINK_OT_find_in_folders)
     bpy.utils.unregister_class(DYNAMICLINK_OT_attempt_relink)
     bpy.utils.unregister_class(DYNAMICLINK_OT_remove_search_path)
