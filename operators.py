@@ -80,9 +80,9 @@ class DLM_OT_replace_linked_asset(Operator):
         return {'RUNNING_MODAL'}
 
 class DLM_OT_scan_linked_assets(Operator):
-    """Scan scene for all linked assets"""
+    """Scan scene for directly linked libraries and their status"""
     bl_idname = "dlm.scan_linked_assets"
-    bl_label = "Scan Linked Assets"
+    bl_label = "Scan Linked Libraries"
     bl_options = {'REGISTER'}
 
     def execute(self, context):
@@ -93,7 +93,11 @@ class DLM_OT_scan_linked_assets(Operator):
         def is_file_missing(filepath):
             if not filepath:
                 return True
-            return not os.path.exists(filepath)
+            try:
+                abs_path = bpy.path.abspath(filepath)
+            except Exception:
+                abs_path = filepath
+            return not os.path.isfile(abs_path)
         
         # Function to get library name from path
         def get_library_name(filepath):
@@ -120,103 +124,99 @@ class DLM_OT_scan_linked_assets(Operator):
             except Exception:
                 return False
 
-            missing_found = False
-            needle = b'.blend'
-            start = 0
-            max_hits = 100  # safety cap
-            hits = 0
-            data_len = len(data)
-            while True:
-                idx = data.find(needle, start)
-                if idx == -1:
-                    break
-                hits += 1
-                if hits > max_hits:
-                    break
-                # expand left to a separator or NUL
-                left = idx
-                while left > 0 and data[left-1] not in (0, 10, 13):  # not NUL/\n/\r
-                    # allow typical path chars; stop on unlikely byte
-                    if data[left-1] in b'\t':
-                        break
-                    left -= 1
-                    # keep paths bounded
-                    if idx - left > 512:
-                        break
-                # expand right a little (after .blend there should be NUL/space)
-                right = idx + len(needle)
-                while right < data_len and data[right] not in (0, 10, 13):
-                    if data[right] in b' \t':
-                        break
-                    right += 1
-                    if right - idx > 512:
-                        break
-                try:
-                    raw = data[left:right]
-                    # decode best-effort
-                    s = raw.decode('utf-8', errors='ignore')
-                    # heuristic: must contain a slash or backslash to be a path
-                    if ('/' in s) or ('\\' in s):
-                        # trim any trailing quotes/spaces
-                        s = s.strip().strip('"\'')
-                        # relative paths are considered unknown; skip
+            import re
+            base_dir = os.path.dirname(blend_path)
+            # Consider absolute Windows paths and Blender // relative paths
+            patterns = [
+                rb"[A-Za-z]:[\\/][^\r\n\0]*?\.blend",
+                rb"\\\\[^\r\n\0]*?\.blend",
+                rb"//[^\r\n\0]*?\.blend",
+            ]
+            for pat in patterns:
+                for m in re.finditer(pat, data):
+                    try:
+                        s = m.group(0).decode('utf-8', errors='ignore').strip().strip('"\'')
                         if s.startswith('//'):
-                            pass
+                            rel = s[2:].replace('/', os.sep).replace('\\', os.sep)
+                            candidate = os.path.normpath(os.path.join(base_dir, rel))
                         else:
-                            if not os.path.exists(s):
-                                missing_found = True
-                                break
-                except Exception:
-                    pass
-                start = idx + len(needle)
-            return missing_found
+                            candidate = s
+                        if not os.path.isfile(candidate):
+                            return True
+                    except Exception:
+                        continue
+            return False
 
-        # Scan all data collections for linked items
-        all_libraries = set()
-        
-        # Check bpy.data.objects
-        for obj in bpy.data.objects:
-            if hasattr(obj, 'library') and obj.library:
-                all_libraries.add(obj.library.filepath)
-            if obj.data and hasattr(obj.data, 'library') and obj.data.library:
-                all_libraries.add(obj.data.library.filepath)
-        
-        # Check bpy.data.armatures specifically
-        for armature in bpy.data.armatures:
-            if hasattr(armature, 'library') and armature.library:
-                all_libraries.add(armature.library.filepath)
-        
-        # Check bpy.data.meshes
-        for mesh in bpy.data.meshes:
-            if hasattr(mesh, 'library') and mesh.library:
-                all_libraries.add(mesh.library.filepath)
-        
-        # Check bpy.data.materials
-        for material in bpy.data.materials:
-            if hasattr(material, 'library') and material.library:
-                all_libraries.add(material.library.filepath)
-        
-        # Check bpy.data.images
-        for image in bpy.data.images:
-            if hasattr(image, 'library') and image.library:
-                all_libraries.add(image.library.filepath)
-        
-        # Check bpy.data.textures
-        for texture in bpy.data.textures:
-            if hasattr(texture, 'library') and texture.library:
-                all_libraries.add(texture.library.filepath)
-        
-        # Check bpy.data.node_groups
-        for node_group in bpy.data.node_groups:
-            if hasattr(node_group, 'library') and node_group.library:
-                all_libraries.add(node_group.library.filepath)
+        # Reload all libraries up front so Blender populates parent links
+        for lib in bpy.data.libraries:
+            try:
+                if lib.filepath:
+                    lib.reload()
+            except Exception:
+                pass
+
+        # Use Blender's library graph: direct libraries have no parent; indirect
+        # libraries have parent != None. We display only direct libraries.
+        direct_libs = set()
+        for lib in bpy.data.libraries:
+            try:
+                if lib.parent is None and lib.filepath:
+                    direct_libs.add(lib.filepath)
+            except Exception:
+                continue
+
+        # Only show directly used libraries in the main list
+        all_libraries = set(direct_libs)
         
         # Store results in scene properties
         context.scene.dynamic_link_manager.linked_assets_count = len(all_libraries)
         
-        # Create library items for the UI, and compute parent-indirect status
-        # Rule: A library is flagged 'indirect' ONLY if it has at least one
-        # missing indirect dependency.
+        # Build set of direct-parent libraries that have at least one missing
+        # indirect child, using the library.parent chain.
+        missing_indirect_libs = set()
+        for lib in bpy.data.libraries:
+            try:
+                if lib.parent is not None and lib.filepath:
+                    try:
+                        abs_child = bpy.path.abspath(lib.filepath)
+                    except Exception:
+                        abs_child = lib.filepath
+                    if not os.path.isfile(abs_child):
+                        # climb up to the root direct parent
+                        root = lib.parent
+                        while getattr(root, 'parent', None) is not None:
+                            root = root.parent
+                        if root and root.filepath:
+                            missing_indirect_libs.add(root.filepath)
+            except Exception:
+                continue
+
+        # Additionally, mark any direct library as INDIRECT if any of its
+        # linked ID users are flagged as missing by Blender (e.g., the source
+        # .blend no longer contains the datablock). This catches cases where
+        # the library file exists but its contents are missing.
+        missing_ids_by_library = set()
+        def check_missing_on(ids):
+            for idb in ids:
+                try:
+                    lib = getattr(idb, 'library', None)
+                    if lib and lib.filepath and getattr(idb, 'is_library_missing', False):
+                        missing_ids_by_library.add(lib.filepath)
+                except Exception:
+                    continue
+
+        check_missing_on(bpy.data.objects)
+        check_missing_on(bpy.data.meshes)
+        check_missing_on(bpy.data.armatures)
+        check_missing_on(bpy.data.materials)
+        check_missing_on(bpy.data.node_groups)
+        check_missing_on(bpy.data.images)
+        check_missing_on(bpy.data.texts)
+        check_missing_on(bpy.data.collections)
+        check_missing_on(bpy.data.cameras)
+        check_missing_on(bpy.data.lights)
+
+        # Create library items for the UI based on definitive indirect set
         library_items = []
         for filepath in sorted(all_libraries):
             if not filepath:
@@ -226,16 +226,8 @@ class DLM_OT_scan_linked_assets(Operator):
             lib_item.name = get_library_name(filepath)
             lib_item.is_missing = is_file_missing(filepath)
 
-            # Determine if this library should be marked indirect because it
-            # appears to reference at least one missing child library.
-            is_indirect_due_to_missing_child = False
-            try:
-                abspath = bpy.path.abspath(filepath) if filepath else filepath
-                is_indirect_due_to_missing_child = scan_blend_for_missing_indirects(abspath)
-            except Exception:
-                is_indirect_due_to_missing_child = False
-
-            lib_item.is_indirect = bool(is_indirect_due_to_missing_child)
+            # INDIRECT if it has a missing indirect child OR any linked IDs are missing
+            lib_item.is_indirect = (filepath in missing_indirect_libs) or (filepath in missing_ids_by_library)
 
             # Store for sorting
             library_items.append((lib_item, filepath))
@@ -360,37 +352,40 @@ class DLM_OT_find_libraries_in_folders(Operator):
         if found_count > 0:
             self.report({'INFO'}, "=== PHASE 2: RELINKING LIBRARIES ===")
             
-            # First, try to use Blender's built-in relinking system
-            try:
-                self.report({'INFO'}, "Attempting to use Blender's built-in relinking...")
-                bpy.ops.file.find_missing_files()
-                self.report({'INFO'}, "✓ Blender's built-in relinking completed successfully")
-            except Exception as e:
-                self.report({'WARNING'}, f"Blender's built-in relinking failed: {e}")
-                
-                # Fallback: Manual relinking using the paths we found
-                self.report({'INFO'}, "Attempting manual relinking using found paths...")
-                relinked_count = 0
-                
-                for lib_item in missing_libs:
-                    lib_filename = os.path.basename(lib_item.filepath)
+            # Manual, deterministic relink of exact filename matches.
+            relinked_count = 0
+            for lib in bpy.data.libraries:
+                try:
+                    if not lib.filepath:
+                        continue
+                    lib_filename = os.path.basename(lib.filepath)
                     if lib_filename in found_libraries:
-                        try:
-                            # Update the library filepath to the found location
-                            # Note: This is a simplified approach - in practice, you might need
-                            # to use Blender's library management functions
-                            self.report({'INFO'}, f"Attempting to relink {lib_filename} to: {found_libraries[lib_filename]}")
+                        new_path = found_libraries[lib_filename]
+                        # Only update if currently missing and different
+                        current_abs = bpy.path.abspath(lib.filepath)
+                        if (not os.path.isfile(current_abs)) or (current_abs != new_path):
+                            lib.filepath = new_path
+                            try:
+                                lib.reload()
+                            except Exception:
+                                pass
                             relinked_count += 1
-                        except Exception as e2:
-                            self.report({'ERROR'}, f"Failed to relink {lib_filename}: {e2}")
-                
-                if relinked_count > 0:
-                    self.report({'INFO'}, f"✓ Manually relinked {relinked_count} libraries")
-                else:
-                    self.report({'WARNING'}, "Manual relinking also failed")
+                            self.report({'INFO'}, f"Relinked {lib_filename} -> {new_path}")
+                except Exception:
+                    continue
+
+            if relinked_count == 0:
+                self.report({'WARNING'}, "No libraries were relinked; ensure filenames match exactly in search paths.")
+            else:
+                self.report({'INFO'}, f"✓ Manually relinked {relinked_count} libraries")
         else:
             self.report({'WARNING'}, "No libraries found in search paths - nothing to relink")
         
+        # Trigger a rescan so UI reflects current status immediately
+        try:
+            bpy.ops.dlm.scan_linked_assets()
+        except Exception:
+            pass
         self.report({'INFO'}, "=== OPERATION COMPLETE ===")
         return {'FINISHED'}
 
