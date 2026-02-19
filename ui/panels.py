@@ -87,12 +87,12 @@ class DLM_PT_main_panel(Panel):
         row.operator("dlm.run_character_migration", text="Run migration", icon="ARMATURE_DATA")
         row = box.row(align=True)
         row.operator("dlm.migrator_copy_attributes", text="Copy attributes", icon="COPY_ID")
-        row.operator("dlm.migrator_migrate_nla", text="Migrate NLA", icon="NLA")
+        row.operator("dlm.migrator_migrate_nla", text="NLA", icon="NLA")
         row.operator("dlm.migrator_custom_properties", text="Custom properties", icon="PROPERTIES")
         row = box.row(align=True)
         row.operator("dlm.migrator_bone_constraints", text="Bone constraints", icon="CONSTRAINT_BONE")
         row.operator("dlm.migrator_retarget_relations", text="Retarget relations", icon="ORIENTATION_PARENT")
-        row.operator("dlm.migrator_basebody_shapekeys", text="Migrate BaseBody shapekeys", icon="SHAPEKEY_DATA")
+        row.operator("dlm.migrator_basebody_shapekeys", text="BaseBody ShapeKeys", icon="SHAPEKEY_DATA")
 
         # Linked Libraries: header row (always), main box only when expanded
         missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)
