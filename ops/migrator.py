@@ -167,19 +167,72 @@ def run_mig_nla(orig, rep, report=None):
 EXCLUDE_PROPS = {"_RNA_UI", "rigify_type", "rigify_parameters"}
 
 
+def _is_id_prop_group(val):
+    """True if val is an ID property group (nested dict-like), not a leaf or string."""
+    if val is None or isinstance(val, (str, bytes)):
+        return False
+    return callable(getattr(val, "keys", None))
+
+
+def _copy_id_prop_recursive(orig_container, rep_container, key, debug_path="", debug=False):
+    """Copy one id property from orig_container[key] into rep_container[key] (recursive for groups)."""
+    if key not in orig_container:
+        return
+    orig_val = orig_container[key]
+    try:
+        if _is_id_prop_group(orig_val):
+            if key not in rep_container:
+                rep_container[key] = {}
+            rep_group = rep_container[key]
+            for k in list(orig_val.keys()):
+                _copy_id_prop_recursive(orig_val, rep_group, k, f"{debug_path}.{key}", debug)
+            if debug:
+                print(f"[DLM MigCustProps] group {debug_path}.{key!r}: copied {len(orig_val.keys())} sub-keys")
+        else:
+            rep_container[key] = orig_val
+            if debug:
+                print(f"[DLM MigCustProps] leaf {debug_path}.{key!r} = {orig_val!r}")
+    except Exception as e:
+        print(f"[DLM MigCustProps] FAILED {debug_path}.{key!r}: {e}")
+
+
+def _copy_custom_props_from(orig_obj, rep_obj, debug_label="", debug=False):
+    """Copy all custom props from orig_obj to rep_obj (object or pose bone), including nested groups."""
+    keys = [k for k in orig_obj.keys() if k not in EXCLUDE_PROPS]
+    if debug and keys:
+        print(f"[DLM MigCustProps] {debug_label} keys: {keys}")
+    for key in keys:
+        _copy_id_prop_recursive(orig_obj, rep_obj, key, debug_label, debug)
+
+
 def run_mig_cust_props(orig, rep):
-    """Custom properties: copy pose-bone custom props, exclude rigify internals."""
+    """Custom properties: copy overridden settings (ID props only, incl. nested e.g. Settings/Devices) from orig to rep."""
+    debug = True
+    print(f"[DLM MigCustProps] orig={orig.name!r} rep={rep.name!r}")
+    # Armature object
+    o_keys = list(orig.keys())
+    print(f"[DLM MigCustProps] armature orig keys (all): {o_keys}")
+    _copy_custom_props_from(orig, rep, f"obj:{orig.name}", debug)
+    # Bones with any id props
+    bones_with_keys = [(pb.name, list(pb.keys())) for pb in orig.pose.bones if pb.keys()]
+    print(f"[DLM MigCustProps] bones with id_props: {bones_with_keys}")
     for pbone in orig.pose.bones:
         if pbone.name not in rep.pose.bones:
             continue
         rbone = rep.pose.bones[pbone.name]
-        for key in list(pbone.keys()):
-            if key in EXCLUDE_PROPS:
-                continue
-            try:
-                rbone[key] = pbone[key]
-            except Exception:
-                pass
+        _copy_custom_props_from(pbone, rbone, f"bone:{pbone.name}", debug)
+    # After: rep armature and Settings bone if present
+    print(f"[DLM MigCustProps] rep armature keys after: {list(rep.keys())}")
+    if "Settings" in rep.pose.bones:
+        sb = rep.pose.bones["Settings"]
+        print(f"[DLM MigCustProps] rep bone Settings keys after: {list(sb.keys())}")
+        if sb.keys():
+            for k in sb.keys():
+                v = sb[k]
+                if _is_id_prop_group(v):
+                    print(f"[DLM MigCustProps]   Settings[{k!r}] (group) keys: {list(v.keys())}")
+                else:
+                    print(f"[DLM MigCustProps]   Settings[{k!r}] = {v!r}")
 
 
 def run_mig_bone_const(orig, rep, orig_to_rep):
