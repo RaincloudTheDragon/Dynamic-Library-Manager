@@ -242,20 +242,175 @@ class DLM_OT_relocate_single_library(Operator):
         return {"RUNNING_MODAL"}
 
 
+def _get_migrator_pair(context):
+    """Return (orig, rep) from scene props (manual or automatic). (None, None) if invalid."""
+    from ..ops.migrator import get_pair_manual, get_pair_automatic
+
+    props = getattr(context.scene, "dynamic_link_manager", None)
+    if not props:
+        return None, None
+    use_auto = getattr(props, "migrator_mode", False)
+    orig, rep = get_pair_automatic(context) if use_auto else get_pair_manual(context)
+    return orig, rep
+
+
+class DLM_OT_migrator_copy_attributes(Operator):
+    bl_idname = "dlm.migrator_copy_attributes"
+    bl_label = "Copy attributes"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        if not orig or not rep or orig == rep:
+            self.report({"ERROR"}, "No valid character pair (set Original/Replacement or enable Automatic).")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_step_1
+            run_step_1(orig, rep)
+            self.report({"INFO"}, "Copy attributes done.")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_migrator_migrate_nla(Operator):
+    bl_idname = "dlm.migrator_migrate_nla"
+    bl_label = "Migrate NLA"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        if not orig or not rep or orig == rep:
+            self.report({"ERROR"}, "No valid character pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_step_2
+            run_step_2(orig, rep)
+            self.report({"INFO"}, "Migrate NLA done.")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_migrator_custom_properties(Operator):
+    bl_idname = "dlm.migrator_custom_properties"
+    bl_label = "Custom properties"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        if not orig or not rep or orig == rep:
+            self.report({"ERROR"}, "No valid character pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_step_3
+            run_step_3(orig, rep)
+            self.report({"INFO"}, "Custom properties done.")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_migrator_bone_constraints(Operator):
+    bl_idname = "dlm.migrator_bone_constraints"
+    bl_label = "Bone constraints"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        if not orig or not rep or orig == rep:
+            self.report({"ERROR"}, "No valid character pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_step_4
+            orig_to_rep = {orig: rep}
+            run_step_4(orig, rep, orig_to_rep)
+            self.report({"INFO"}, "Bone constraints done.")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_migrator_retarget_relations(Operator):
+    bl_idname = "dlm.migrator_retarget_relations"
+    bl_label = "Retarget relations"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        if not orig or not rep or orig == rep:
+            self.report({"ERROR"}, "No valid character pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_step_5
+            from ..utils import descendants
+            rep_descendants = descendants(rep)
+            orig_to_rep = {orig: rep}
+            run_step_5(orig, rep, rep_descendants, orig_to_rep)
+            self.report({"INFO"}, "Retarget relations done.")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_migrator_replacement_base_body(Operator):
+    bl_idname = "dlm.migrator_replacement_base_body"
+    bl_label = "Replacement base body"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        if not orig or not rep or orig == rep:
+            self.report({"ERROR"}, "No valid character pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_step_6
+            from ..utils import descendants
+            rep_descendants = descendants(rep)
+            run_step_6(orig, rep, rep_descendants)
+            self.report({"INFO"}, "Replacement base body done.")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+MIGRATOR_STEP_OPS = (
+    "dlm.migrator_copy_attributes",
+    "dlm.migrator_migrate_nla",
+    "dlm.migrator_custom_properties",
+    "dlm.migrator_bone_constraints",
+    "dlm.migrator_retarget_relations",
+    "dlm.migrator_replacement_base_body",
+)
+
+
 class DLM_OT_run_character_migration(Operator):
     bl_idname = "dlm.run_character_migration"
     bl_label = "Run Character Migration"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        from ..ops.migrator import run_full_migration
-
-        ok, msg = run_full_migration(context)
-        if ok:
-            self.report({"INFO"}, msg)
-            return {"FINISHED"}
-        self.report({"ERROR"}, msg)
-        return {"CANCELLED"}
+        steps = [
+            bpy.ops.dlm.migrator_copy_attributes,
+            bpy.ops.dlm.migrator_migrate_nla,
+            bpy.ops.dlm.migrator_custom_properties,
+            bpy.ops.dlm.migrator_bone_constraints,
+            bpy.ops.dlm.migrator_retarget_relations,
+            bpy.ops.dlm.migrator_replacement_base_body,
+        ]
+        for i, op in enumerate(steps):
+            result = op()
+            if result != {"FINISHED"}:
+                self.report({"ERROR"}, f"Migration failed at step {i + 1}: {MIGRATOR_STEP_OPS[i]}")
+                return {"CANCELLED"}
+        self.report({"INFO"}, "Migration complete.")
+        return {"FINISHED"}
 
 
 class DLM_OT_picker_original_character(Operator):
@@ -304,4 +459,10 @@ OPERATOR_CLASSES = [
     DLM_OT_run_character_migration,
     DLM_OT_picker_original_character,
     DLM_OT_picker_replacement_character,
+    DLM_OT_migrator_copy_attributes,
+    DLM_OT_migrator_migrate_nla,
+    DLM_OT_migrator_custom_properties,
+    DLM_OT_migrator_bone_constraints,
+    DLM_OT_migrator_retarget_relations,
+    DLM_OT_migrator_replacement_base_body,
 ]

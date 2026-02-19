@@ -85,6 +85,14 @@ class DLM_PT_main_panel(Panel):
         row.operator("dlm.picker_replacement_character", text="", icon="EYEDROPPER")
         row = box.row()
         row.operator("dlm.run_character_migration", text="Run migration", icon="ARMATURE_DATA")
+        row = box.row(align=True)
+        row.operator("dlm.migrator_copy_attributes", text="Copy attributes")
+        row.operator("dlm.migrator_migrate_nla", text="Migrate NLA")
+        row.operator("dlm.migrator_custom_properties", text="Custom properties")
+        row = box.row(align=True)
+        row.operator("dlm.migrator_bone_constraints", text="Bone constraints")
+        row.operator("dlm.migrator_retarget_relations", text="Retarget relations")
+        row.operator("dlm.migrator_replacement_base_body", text="Replacement base body")
 
         # Linked Libraries: header row (always), main box only when expanded
         missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)
