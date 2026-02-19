@@ -86,23 +86,21 @@ class DLM_PT_main_panel(Panel):
         row = box.row()
         row.operator("dlm.run_character_migration", text="Run migration", icon="ARMATURE_DATA")
 
-        # Linked Libraries (own dropdown)
-        box = layout.box()
-        box.label(text="Linked Libraries Analysis")
-        row = box.row()
-        row.operator("dlm.scan_linked_assets", text="Scan Linked Assets", icon="FILE_REFRESH")
+        # Linked Libraries: header row (always), main box only when expanded
         missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)
+        section_icon = "DISCLOSURE_TRI_DOWN" if props.linked_libraries_section_expanded else "DISCLOSURE_TRI_RIGHT"
+        row = layout.row(align=True)
+        row.prop(props, "linked_libraries_section_expanded", text="", icon=section_icon, icon_only=True)
+        row.label(text="Linked Libraries Analysis")
         if missing_count > 0:
-            row.label(text=f"({props.linked_assets_count} libraries, {missing_count} missing)", icon="ERROR")
+            row.label(text=f"({props.linked_assets_count} libs, {missing_count} missing)", icon="ERROR")
         else:
             row.label(text=f"({props.linked_assets_count} libraries)")
-        if props.linked_assets_count > 0:
-            row = box.row(align=True)
-            icon = "DISCLOSURE_TRI_DOWN" if props.linked_libraries_expanded else "DISCLOSURE_TRI_RIGHT"
-            row.prop(props, "linked_libraries_expanded", text="", icon=icon, icon_only=True)
-            row.label(text="Linked Libraries:")
-            row.label(text=f"({props.linked_assets_count} libraries)")
-            if props.linked_libraries_expanded:
+        if props.linked_libraries_section_expanded:
+            box = layout.box()
+            row = box.row()
+            row.operator("dlm.scan_linked_assets", text="Scan Linked Assets", icon="FILE_REFRESH")
+            if props.linked_assets_count > 0:
                 row = box.row()
                 row.template_list("DLM_UL_library_list", "", props, "linked_libraries", props, "linked_libraries_index")
                 row = box.row()

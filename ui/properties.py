@@ -34,7 +34,11 @@ class DynamicLinkManagerProperties(PropertyGroup):
     linked_libraries: CollectionProperty(type=LinkedLibraryItem, name="Linked Libraries")
     linked_libraries_index: IntProperty(name="Linked Libraries Index", default=0)
     linked_assets_count: IntProperty(name="Linked Assets Count", default=0)
-    linked_libraries_expanded: BoolProperty(name="Linked Libraries Expanded", default=True)
+    linked_libraries_section_expanded: BoolProperty(
+        name="Linked Libraries Analysis Expanded",
+        description="Show or hide the Linked Libraries Analysis section",
+        default=False,
+    )
     selected_asset_path: StringProperty(name="Selected Asset Path", default="")
 
     # Character migrator (manual mode)
