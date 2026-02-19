@@ -64,20 +64,53 @@ def _mirror_als_turn_on(orig, rep):
             pass
 
 
-def run_mig_nla(orig, rep):
-    """Migrate NLA: copy tracks and strips to replacement; or apply active action only (MigNLA)."""
+def run_mig_nla(orig, rep, report=None):
+    """Migrate NLA: copy tracks and strips to replacement; or mirror action slot when no NLA (MigNLA)."""
     if not orig.animation_data:
         return
     ad = orig.animation_data
     has_nla = ad.nla_tracks and len(ad.nla_tracks) > 0
     active_action = getattr(ad, "action", None)
-    if not has_nla and active_action:
+    if not has_nla:
         if rep.animation_data is None:
             rep.animation_data_create()
-        rep.animation_data.action = active_action
+        rad = rep.animation_data
+        # Debug: Orig action slot state (Blender 4.4+ slotted actions).
+        def _slot_debug(label, animdata):
+            if animdata is None:
+                print(f"[DLM MigNLA] {label}: no animation_data")
+                return
+            a = getattr(animdata, "action", None)
+            print(f"[DLM MigNLA] {label} action={a.name if a else None}")
+            for p in ("action_slot", "action_slot_handle", "last_slot_identifier",
+                      "action_blend_type", "action_extrapolation", "action_influence"):
+                if hasattr(animdata, p):
+                    v = getattr(animdata, p, None)
+                    if hasattr(v, "identifier"):
+                        v = getattr(v, "identifier", v)
+                    print(f"[DLM MigNLA]   {p}={v!r}")
+        _slot_debug("Orig (before)", ad)
+        _slot_debug("Rep (before)", rad)
+        # Copy last_slot_identifier before action so slot is resolved when assigning (4.4+).
+        if hasattr(ad, "last_slot_identifier") and hasattr(rad, "last_slot_identifier") and ad.last_slot_identifier:
+            rad.last_slot_identifier = ad.last_slot_identifier
+            print(f"[DLM MigNLA] set rep last_slot_identifier={ad.last_slot_identifier!r}")
+        rad.action = active_action
+        # Copy Action Slot and related props (Blender 4.4+ slotted actions).
+        if getattr(ad, "action_slot", None) and getattr(rad, "action_slot", None):
+            try:
+                rad.action_slot = ad.action_slot
+                print(f"[DLM MigNLA] set rep action_slot={getattr(ad.action_slot, 'identifier', ad.action_slot)!r}")
+            except Exception as e:
+                print(f"[DLM MigNLA] rad.action_slot assign failed: {e}")
+        for prop in ("action_blend_type", "action_extrapolation", "action_influence"):
+            if hasattr(ad, prop) and hasattr(rad, prop):
+                setattr(rad, prop, getattr(ad, prop))
+                print(f"[DLM MigNLA] set rep {prop}={getattr(ad, prop)!r}")
+        _slot_debug("Rep (after)", rad)
         _mirror_als_turn_on(orig, rep)
-        return
-    if not has_nla:
+        if report:
+            report({"INFO"}, "No NLA detected, active action and slot copied to Replacement Armature.")
         return
     if rep.animation_data is None:
         rep.animation_data_create()
@@ -122,6 +155,13 @@ def run_mig_nla(orig, rep):
             new_strip.use_sync_length = strip.use_sync_length
         prev_track = new_track
     _mirror_als_turn_on(orig, rep)
+    if report:
+        key = "als.turn_on"
+        has_als = key in orig or any(key in pb for pb in orig.pose.bones)
+        if has_als:
+            report({"INFO"}, "NLA layers detected, Animation Layer attributes migrated to Replacement Armature.")
+        else:
+            report({"INFO"}, "NLA layers detected and migrated. No Animation Layers found.")
 
 
 EXCLUDE_PROPS = {"_RNA_UI", "rigify_type", "rigify_parameters"}

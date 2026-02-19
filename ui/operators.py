@@ -302,8 +302,7 @@ class DLM_OT_migrator_migrate_nla(Operator):
             return {"CANCELLED"}
         try:
             from ..ops.migrator import run_mig_nla
-            run_mig_nla(orig, rep)
-            self.report({"INFO"}, "Migrate NLA done.")
+            run_mig_nla(orig, rep, report=self.report)
             return {"FINISHED"}
         except Exception as e:
             self.report({"ERROR"}, str(e))
