@@ -2,8 +2,8 @@ schema_version = "1.0.0"
 
 id = "dynamiclinkmanager"
 name = "Dynamic Link Manager"
-tagline = "Relink characters and library blends with ease"
-version = "0.0.1"
+tagline = "Character migrator and linked library tools"
+version = "0.0.2"
 type = "add-on"
 
 # Optional: Semantic Versioning

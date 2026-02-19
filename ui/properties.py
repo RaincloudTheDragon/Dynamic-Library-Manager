@@ -1,0 +1,57 @@
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3 of the License, or
+# (at your option) any later version.
+
+import bpy
+from bpy.types import PropertyGroup
+from bpy.props import IntProperty, StringProperty, BoolProperty, CollectionProperty, PointerProperty
+
+
+class SearchPathItem(PropertyGroup):
+    path: StringProperty(
+        name="Search Path",
+        description="Path to search for missing linked libraries",
+        subtype="DIR_PATH",
+    )
+
+
+class LinkedDatablockItem(PropertyGroup):
+    name: StringProperty(name="Name", description="Name of the linked datablock")
+    type: StringProperty(name="Type", description="Type of the linked datablock")
+
+
+class LinkedLibraryItem(PropertyGroup):
+    filepath: StringProperty(name="File Path", description="Path to the linked .blend file")
+    name: StringProperty(name="Name", description="Name of the linked .blend file")
+    is_missing: BoolProperty(name="Missing", description="True if the linked file is not found")
+    is_indirect: BoolProperty(name="Is Indirect", description="True if this is an indirectly linked library")
+    is_expanded: BoolProperty(name="Expanded", default=True)
+    linked_datablocks: CollectionProperty(type=LinkedDatablockItem, name="Linked Datablocks")
+
+
+class DynamicLinkManagerProperties(PropertyGroup):
+    linked_libraries: CollectionProperty(type=LinkedLibraryItem, name="Linked Libraries")
+    linked_libraries_index: IntProperty(name="Linked Libraries Index", default=0)
+    linked_assets_count: IntProperty(name="Linked Assets Count", default=0)
+    linked_libraries_expanded: BoolProperty(name="Linked Libraries Expanded", default=True)
+    selected_asset_path: StringProperty(name="Selected Asset Path", default="")
+
+    # Character migrator (manual mode)
+    migrator_mode: BoolProperty(
+        name="Automatic",
+        description="Automatic: discover pair by Name_Rigify / Name_Rigify.001. Manual: use fields below",
+        default=False,
+    )
+    original_character: PointerProperty(
+        name="Original Character",
+        description="Armature to migrate from",
+        type=bpy.types.Object,
+        poll=lambda self, obj: obj and obj.type == "ARMATURE",
+    )
+    replacement_character: PointerProperty(
+        name="Replacement Character",
+        description="Armature to migrate to",
+        type=bpy.types.Object,
+        poll=lambda self, obj: obj and obj.type == "ARMATURE",
+    )

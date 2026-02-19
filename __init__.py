@@ -12,32 +12,36 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 import bpy
-from bpy.props import StringProperty, BoolProperty, EnumProperty
-from bpy.types import Panel, Operator, PropertyGroup
 
-# Import local modules
-from . import operators
-from . import ui
+from .ui import CLASSES
+from .ui.properties import DynamicLinkManagerProperties
+from .ui.preferences import DynamicLinkManagerPreferences
+
 
 def ensure_default_search_path():
-    """Ensure there's always at least one search path"""
-    prefs = bpy.context.preferences.addons.get(__name__)
-    if prefs and len(prefs.preferences.search_paths) == 0:
-        new_path = prefs.preferences.search_paths.add()
-        new_path.path = "//"  # Default to relative path
+    addon = bpy.context.preferences.addons.get(__name__)
+    if addon and len(addon.preferences.search_paths) == 0:
+        addon.preferences.search_paths.add().path = "//"
+
 
 def register():
-    operators.register()
-    ui.register()
-    # Ensure default search path exists
+    DynamicLinkManagerPreferences.bl_idname = __name__
+    for cls in CLASSES:
+        bpy.utils.register_class(cls)
+    bpy.types.Scene.dynamic_link_manager = bpy.props.PointerProperty(type=DynamicLinkManagerProperties)
     bpy.app.handlers.load_post.append(ensure_default_search_path)
 
+
 def unregister():
-    ui.unregister()
-    operators.unregister()
-    # Remove the handler
     if ensure_default_search_path in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(ensure_default_search_path)
+    del bpy.types.Scene.dynamic_link_manager
+    for cls in reversed(CLASSES):
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError:
+            pass
+
 
 if __name__ == "__main__":
     register()
