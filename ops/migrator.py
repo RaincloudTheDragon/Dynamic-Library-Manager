@@ -47,19 +47,139 @@ def run_copy_attr(orig, rep):
     rep.scale = orig.scale.copy()
 
 
+def _has_als_anywhere(orig):
+    """Return True if orig has Animation Layers (addon uses Object.als RNA PropertyGroup, obj.als.turn_on)."""
+    # Animation Layers addon: bpy.types.Object.als (RNA), not id props
+    if getattr(orig, "als", None) is not None:
+        return True
+    key = "als.turn_on"
+    if key in orig:
+        return True
+    if getattr(orig, "data", None) and hasattr(orig.data, "keys") and key in orig.data:
+        return True
+    try:
+        als = orig.get("als")
+        if als is not None and callable(getattr(als, "keys", None)) and "turn_on" in als.keys():
+            return True
+    except Exception:
+        pass
+    for pb in orig.pose.bones:
+        if key in pb:
+            return True
+        try:
+            als = pb.get("als")
+            if als is not None and callable(getattr(als, "keys", None)) and "turn_on" in als.keys():
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _debug_als_lookup(orig):
+    """Print full debug for AnimLayers: RNA obj.als and every id_prop on orig."""
+    key = "als.turn_on"
+    print("[DLM MigNLA] === AnimLayers debug ===")
+    als_rna = getattr(orig, "als", None)
+    print(f"[DLM MigNLA]   orig.als (RNA): {als_rna!r}, turn_on={getattr(als_rna, 'turn_on', 'N/A') if als_rna else 'N/A'}")
+    print(f"[DLM MigNLA]   'als.turn_on' in orig (object): {key in orig}")
+    if getattr(orig, "data", None):
+        has_data_keys = hasattr(orig.data, "keys")
+        print(f"[DLM MigNLA]   orig.data has keys(): {has_data_keys}")
+        if has_data_keys:
+            print(f"[DLM MigNLA]   'als.turn_on' in orig.data: {key in orig.data}")
+            print(f"[DLM MigNLA]   orig.data keys: {list(orig.data.keys())}")
+    try:
+        als = orig.get("als")
+        has_als = als is not None and callable(getattr(als, "keys", None))
+        print(f"[DLM MigNLA]   orig.get('als') is group: {has_als}")
+        if has_als:
+            print(f"[DLM MigNLA]   orig['als'] keys: {list(als.keys())}")
+            print(f"[DLM MigNLA]   'turn_on' in orig['als']: {'turn_on' in als.keys()}")
+    except Exception as e:
+        print(f"[DLM MigNLA]   orig.get('als') error: {e}")
+    print(f"[DLM MigNLA]   orig (object) all keys: {list(orig.keys())}")
+    for k in list(orig.keys()):
+        try:
+            v = orig[k]
+            if callable(getattr(v, "keys", None)):
+                print(f"[DLM MigNLA]   orig[{k!r}] (group) keys: {list(v.keys())}")
+            else:
+                print(f"[DLM MigNLA]   orig[{k!r}] = {v!r}")
+        except Exception as e:
+            print(f"[DLM MigNLA]   orig[{k!r}] error: {e}")
+    # RNA props that might be animation-layer related
+    try:
+        rna_props = list(orig.bl_rna.properties.keys())
+        layer_like = [p for p in rna_props if "layer" in p.lower() or "als" in p.lower() or "turn" in p.lower() or "anim" in p.lower()]
+        print(f"[DLM MigNLA]   orig RNA props (layer/als/turn/anim): {layer_like}")
+    except Exception as e:
+        print(f"[DLM MigNLA]   orig bl_rna.properties error: {e}")
+    # Every bone that has keys
+    bones_with_keys = []
+    for pb in orig.pose.bones:
+        if pb.keys():
+            bones_with_keys.append((pb.name, list(pb.keys())))
+    print(f"[DLM MigNLA]   bones with id_props ({len(bones_with_keys)}): {bones_with_keys[:20]}{'...' if len(bones_with_keys) > 20 else ''}")
+    for bname, bkeys in bones_with_keys[:10]:
+        pb = orig.pose.bones[bname]
+        print(f"[DLM MigNLA]   bone {bname!r}: keys={bkeys}")
+        for k in bkeys:
+            try:
+                v = pb[k]
+                if callable(getattr(v, "keys", None)):
+                    print(f"[DLM MigNLA]     [{k!r}] (group) keys: {list(v.keys())}")
+                else:
+                    print(f"[DLM MigNLA]     [{k!r}] = {v!r}")
+            except Exception as e:
+                print(f"[DLM MigNLA]     [{k!r}] error: {e}")
+    print("[DLM MigNLA] === end AnimLayers debug ===")
+
+
 def _mirror_als_turn_on(orig, rep):
-    """Mirror als.turn_on (animation layers) from original to replacement armature."""
+    """Mirror Animation Layers state: obj.als.turn_on (RNA) and id-property fallbacks."""
+    # Animation Layers addon: Object.als is RNA PropertyGroup
+    orig_als = getattr(orig, "als", None)
+    rep_als = getattr(rep, "als", None)
+    if orig_als is not None and rep_als is not None:
+        try:
+            rep_als.turn_on = orig_als.turn_on
+        except Exception:
+            pass
     key = "als.turn_on"
     if key in orig:
         try:
             rep[key] = orig[key]
         except Exception:
             pass
-    for pbone in orig.pose.bones:
-        if pbone.name not in rep.pose.bones or key not in pbone:
-            continue
+    try:
+        als = orig.get("als")
+        if als is not None and callable(getattr(als, "keys", None)) and "turn_on" in als.keys():
+            if "als" not in rep:
+                rep["als"] = {}
+            rep["als"]["turn_on"] = als["turn_on"]
+    except Exception:
+        pass
+    if getattr(orig, "data", None) and hasattr(orig.data, "keys") and key in orig.data:
         try:
-            rep.pose.bones[pbone.name][key] = pbone[key]
+            if rep.data is not None and hasattr(rep.data, "keys"):
+                rep.data[key] = orig.data[key]
+        except Exception:
+            pass
+    for pbone in orig.pose.bones:
+        if pbone.name not in rep.pose.bones:
+            continue
+        rbone = rep.pose.bones[pbone.name]
+        if key in pbone:
+            try:
+                rbone[key] = pbone[key]
+            except Exception:
+                pass
+        try:
+            als = pbone.get("als")
+            if als is not None and callable(getattr(als, "keys", None)) and "turn_on" in als.keys():
+                if "als" not in rbone:
+                    rbone["als"] = {}
+                rbone["als"]["turn_on"] = als["turn_on"]
         except Exception:
             pass
 
@@ -156,8 +276,9 @@ def run_mig_nla(orig, rep, report=None):
         prev_track = new_track
     _mirror_als_turn_on(orig, rep)
     if report:
-        key = "als.turn_on"
-        has_als = key in orig or any(key in pb for pb in orig.pose.bones)
+        _debug_als_lookup(orig)
+        has_als = _has_als_anywhere(orig)
+        print(f"[DLM MigNLA] AnimLayers check: has_als={has_als}")
         if has_als:
             report({"INFO"}, "NLA layers detected, Animation Layer attributes migrated to Replacement Armature.")
         else:
