@@ -257,6 +257,7 @@ def _get_migrator_pair(context):
 class DLM_OT_migrator_copy_attributes(Operator):
     bl_idname = "dlm.migrator_copy_attributes"
     bl_label = "Copy attributes"
+    bl_icon = "COPY_ID"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -277,6 +278,7 @@ class DLM_OT_migrator_copy_attributes(Operator):
 class DLM_OT_migrator_migrate_nla(Operator):
     bl_idname = "dlm.migrator_migrate_nla"
     bl_label = "Migrate NLA"
+    bl_icon = "NLA"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -297,6 +299,7 @@ class DLM_OT_migrator_migrate_nla(Operator):
 class DLM_OT_migrator_custom_properties(Operator):
     bl_idname = "dlm.migrator_custom_properties"
     bl_label = "Custom properties"
+    bl_icon = "PROPERTIES"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -317,6 +320,7 @@ class DLM_OT_migrator_custom_properties(Operator):
 class DLM_OT_migrator_bone_constraints(Operator):
     bl_idname = "dlm.migrator_bone_constraints"
     bl_label = "Bone constraints"
+    bl_icon = "CONSTRAINT_BONE"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -338,6 +342,7 @@ class DLM_OT_migrator_bone_constraints(Operator):
 class DLM_OT_migrator_retarget_relations(Operator):
     bl_idname = "dlm.migrator_retarget_relations"
     bl_label = "Retarget relations"
+    bl_icon = "ORIENTATION_PARENT"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -361,6 +366,7 @@ class DLM_OT_migrator_retarget_relations(Operator):
 class DLM_OT_migrator_basebody_shapekeys(Operator):
     bl_idname = "dlm.migrator_basebody_shapekeys"
     bl_label = "Migrate BaseBody shapekeys"
+    bl_icon = "SHAPEKEY_DATA"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
