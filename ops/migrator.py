@@ -437,7 +437,8 @@ def run_mig_bone_const(orig, rep, orig_to_rep):
 
 
 def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
-    """Retarget relations: parents, constraint targets, Armature modifiers to rep."""
+    """Retarget relations: parents, constraint targets, Armature modifiers to rep. Skip objects in orig's hierarchy (linked collection)."""
+    orig_hierarchy = {orig} | descendants(orig)
     candidates = set(rep_descendants)
     for ob in bpy.data.objects:
         if getattr(ob.parent, "name", None) == orig.name:
@@ -445,6 +446,7 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
         for c in getattr(ob, "constraints", []):
             if getattr(c, "target", None) == orig:
                 candidates.add(ob)
+    candidates -= orig_hierarchy
     for ob in candidates:
         if ob.parent == orig:
             ob.parent = rep
