@@ -18,6 +18,7 @@ def _prefs(context):
 class DLM_OT_replace_linked_asset(Operator):
     bl_idname = "dlm.replace_linked_asset"
     bl_label = "Replace Linked Asset"
+    bl_description = "Open file browser to replace the linked asset with another file"
     bl_options = {"REGISTER", "UNDO"}
     filepath: StringProperty(name="File Path", description="Path to the new asset file", subtype="FILE_PATH")
 
@@ -48,6 +49,7 @@ class DLM_OT_replace_linked_asset(Operator):
 class DLM_OT_scan_linked_assets(Operator):
     bl_idname = "dlm.scan_linked_assets"
     bl_label = "Scan Linked Libraries"
+    bl_description = "Scan the current file for linked libraries and list their status"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -59,6 +61,7 @@ class DLM_OT_scan_linked_assets(Operator):
 class DLM_OT_find_libraries_in_folders(Operator):
     bl_idname = "dlm.find_libraries_in_folders"
     bl_label = "Find Libraries in Folders"
+    bl_description = "Search addon search paths for missing library blend files"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -70,6 +73,7 @@ class DLM_OT_find_libraries_in_folders(Operator):
 class DLM_OT_open_linked_file(Operator):
     bl_idname = "dlm.open_linked_file"
     bl_label = "Open Linked File"
+    bl_description = "Open the selected linked blend file in a new Blender instance"
     bl_options = {"REGISTER"}
     filepath: StringProperty(name="File Path", default="")
 
@@ -89,6 +93,7 @@ class DLM_OT_open_linked_file(Operator):
 class DLM_OT_add_search_path(Operator):
     bl_idname = "dlm.add_search_path"
     bl_label = "Add Search Path"
+    bl_description = "Add a new folder to the list of search paths for finding libraries"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -103,6 +108,7 @@ class DLM_OT_add_search_path(Operator):
 class DLM_OT_remove_search_path(Operator):
     bl_idname = "dlm.remove_search_path"
     bl_label = "Remove Search Path"
+    bl_description = "Remove the selected search path from the list"
     bl_options = {"REGISTER"}
     index: IntProperty(name="Index", default=0)
 
@@ -117,6 +123,7 @@ class DLM_OT_remove_search_path(Operator):
 class DLM_OT_attempt_relink(Operator):
     bl_idname = "dlm.attempt_relink"
     bl_label = "Attempt Relink"
+    bl_description = "Try to relink missing libraries using the configured search paths"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -128,6 +135,7 @@ class DLM_OT_attempt_relink(Operator):
 class DLM_OT_browse_search_path(Operator):
     bl_idname = "dlm.browse_search_path"
     bl_label = "Browse Search Path"
+    bl_description = "Browse to set the folder for the selected search path"
     bl_options = {"REGISTER"}
     index: IntProperty(name="Index", default=0)
     filepath: StringProperty(name="Search Path", subtype="DIR_PATH")
@@ -150,6 +158,7 @@ class DLM_OT_browse_search_path(Operator):
 class DLM_OT_reload_libraries(Operator):
     bl_idname = "dlm.reload_libraries"
     bl_label = "Reload Libraries"
+    bl_description = "Reload all linked libraries (or fallback manual reload)"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -171,6 +180,7 @@ class DLM_OT_reload_libraries(Operator):
 class DLM_OT_make_paths_relative(Operator):
     bl_idname = "dlm.make_paths_relative"
     bl_label = "Make Paths Relative"
+    bl_description = "Convert all internal file paths to relative"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -186,6 +196,7 @@ class DLM_OT_make_paths_relative(Operator):
 class DLM_OT_make_paths_absolute(Operator):
     bl_idname = "dlm.make_paths_absolute"
     bl_label = "Make Paths Absolute"
+    bl_description = "Convert all internal file paths to absolute"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -201,6 +212,7 @@ class DLM_OT_make_paths_absolute(Operator):
 class DLM_OT_relocate_single_library(Operator):
     bl_idname = "dlm.relocate_single_library"
     bl_label = "Relocate Library"
+    bl_description = "Point the selected library to a new blend file and reload"
     bl_options = {"REGISTER", "UNDO"}
     target_filepath: StringProperty(name="Current Library Path", default="")
     filepath: StringProperty(name="New Library File", subtype="FILE_PATH", default="")
@@ -256,7 +268,8 @@ def _get_migrator_pair(context):
 
 class DLM_OT_migrator_copy_attributes(Operator):
     bl_idname = "dlm.migrator_copy_attributes"
-    bl_label = "Copy attributes"
+    bl_label = "CopyAttr"
+    bl_description = "Copy object and armature attributes from original to replacement character"
     bl_icon = "COPY_ID"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -266,8 +279,8 @@ class DLM_OT_migrator_copy_attributes(Operator):
             self.report({"ERROR"}, "No valid character pair (set Original/Replacement or enable Automatic).")
             return {"CANCELLED"}
         try:
-            from ..ops.migrator import run_step_1
-            run_step_1(orig, rep)
+            from ..ops.migrator import run_copy_attr
+            run_copy_attr(orig, rep)
             self.report({"INFO"}, "Copy attributes done.")
             return {"FINISHED"}
         except Exception as e:
@@ -277,7 +290,8 @@ class DLM_OT_migrator_copy_attributes(Operator):
 
 class DLM_OT_migrator_migrate_nla(Operator):
     bl_idname = "dlm.migrator_migrate_nla"
-    bl_label = "Migrate NLA"
+    bl_label = "MigNLA"
+    bl_description = "Migrate NLA tracks and strips from original to replacement character"
     bl_icon = "NLA"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -287,8 +301,8 @@ class DLM_OT_migrator_migrate_nla(Operator):
             self.report({"ERROR"}, "No valid character pair.")
             return {"CANCELLED"}
         try:
-            from ..ops.migrator import run_step_2
-            run_step_2(orig, rep)
+            from ..ops.migrator import run_mig_nla
+            run_mig_nla(orig, rep)
             self.report({"INFO"}, "Migrate NLA done.")
             return {"FINISHED"}
         except Exception as e:
@@ -298,7 +312,8 @@ class DLM_OT_migrator_migrate_nla(Operator):
 
 class DLM_OT_migrator_custom_properties(Operator):
     bl_idname = "dlm.migrator_custom_properties"
-    bl_label = "Custom properties"
+    bl_label = "MigCustProps"
+    bl_description = "Copy custom properties from original to replacement character"
     bl_icon = "PROPERTIES"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -308,8 +323,8 @@ class DLM_OT_migrator_custom_properties(Operator):
             self.report({"ERROR"}, "No valid character pair.")
             return {"CANCELLED"}
         try:
-            from ..ops.migrator import run_step_3
-            run_step_3(orig, rep)
+            from ..ops.migrator import run_mig_cust_props
+            run_mig_cust_props(orig, rep)
             self.report({"INFO"}, "Custom properties done.")
             return {"FINISHED"}
         except Exception as e:
@@ -319,7 +334,8 @@ class DLM_OT_migrator_custom_properties(Operator):
 
 class DLM_OT_migrator_bone_constraints(Operator):
     bl_idname = "dlm.migrator_bone_constraints"
-    bl_label = "Bone constraints"
+    bl_label = "MigBoneConst"
+    bl_description = "Migrate bone constraints from original to replacement armature"
     bl_icon = "CONSTRAINT_BONE"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -329,9 +345,9 @@ class DLM_OT_migrator_bone_constraints(Operator):
             self.report({"ERROR"}, "No valid character pair.")
             return {"CANCELLED"}
         try:
-            from ..ops.migrator import run_step_4
+            from ..ops.migrator import run_mig_bone_const
             orig_to_rep = {orig: rep}
-            run_step_4(orig, rep, orig_to_rep)
+            run_mig_bone_const(orig, rep, orig_to_rep)
             self.report({"INFO"}, "Bone constraints done.")
             return {"FINISHED"}
         except Exception as e:
@@ -341,7 +357,8 @@ class DLM_OT_migrator_bone_constraints(Operator):
 
 class DLM_OT_migrator_retarget_relations(Operator):
     bl_idname = "dlm.migrator_retarget_relations"
-    bl_label = "Retarget relations"
+    bl_label = "RetargRelatives"
+    bl_description = "Retarget parent/child and other relations to the replacement character"
     bl_icon = "ORIENTATION_PARENT"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -351,11 +368,11 @@ class DLM_OT_migrator_retarget_relations(Operator):
             self.report({"ERROR"}, "No valid character pair.")
             return {"CANCELLED"}
         try:
-            from ..ops.migrator import run_step_5
+            from ..ops.migrator import run_retarg_relatives
             from ..utils import descendants
             rep_descendants = descendants(rep)
             orig_to_rep = {orig: rep}
-            run_step_5(orig, rep, rep_descendants, orig_to_rep)
+            run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep)
             self.report({"INFO"}, "Retarget relations done.")
             return {"FINISHED"}
         except Exception as e:
@@ -365,7 +382,8 @@ class DLM_OT_migrator_retarget_relations(Operator):
 
 class DLM_OT_migrator_basebody_shapekeys(Operator):
     bl_idname = "dlm.migrator_basebody_shapekeys"
-    bl_label = "Migrate BaseBody shapekeys"
+    bl_label = "MigBBodyShapeKeys"
+    bl_description = "Migrate base body mesh shape key values from original to replacement"
     bl_icon = "SHAPEKEY_DATA"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -375,10 +393,10 @@ class DLM_OT_migrator_basebody_shapekeys(Operator):
             self.report({"ERROR"}, "No valid character pair.")
             return {"CANCELLED"}
         try:
-            from ..ops.migrator import run_step_6
+            from ..ops.migrator import run_mig_bbody_shapekeys
             from ..utils import descendants
             rep_descendants = descendants(rep)
-            run_step_6(orig, rep, rep_descendants, context)
+            run_mig_bbody_shapekeys(orig, rep, rep_descendants, context)
             self.report({"INFO"}, "Migrate BaseBody shapekeys done.")
             return {"FINISHED"}
         except Exception as e:
@@ -399,6 +417,7 @@ MIGRATOR_STEP_OPS = (
 class DLM_OT_run_character_migration(Operator):
     bl_idname = "dlm.run_character_migration"
     bl_label = "Run Character Migration"
+    bl_description = "Run all six migration steps (CopyAttr, MigNLA, MigCustProps, MigBoneConst, RetargRelatives, MigBBodyShapeKeys) in order"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -422,6 +441,7 @@ class DLM_OT_run_character_migration(Operator):
 class DLM_OT_picker_original_character(Operator):
     bl_idname = "dlm.picker_original_character"
     bl_label = "Pick Original"
+    bl_description = "Set the original character armature from the active object"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -437,6 +457,7 @@ class DLM_OT_picker_original_character(Operator):
 class DLM_OT_picker_replacement_character(Operator):
     bl_idname = "dlm.picker_replacement_character"
     bl_label = "Pick Replacement"
+    bl_description = "Set the replacement character armature from the active object"
     bl_options = {"REGISTER"}
 
     def execute(self, context):
@@ -457,6 +478,7 @@ def _tweak_poll(context):
 class DLM_OT_tweak_add_arm(Operator):
     bl_idname = "dlm.tweak_add_arm"
     bl_label = "Add Arm Tweaks"
+    bl_description = "Add tweak bone constraints to arm bones on the replacement character"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -474,6 +496,7 @@ class DLM_OT_tweak_add_arm(Operator):
 class DLM_OT_tweak_remove_arm(Operator):
     bl_idname = "dlm.tweak_remove_arm"
     bl_label = "Remove Arm Tweaks"
+    bl_description = "Remove arm tweak constraints from the replacement character"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -491,6 +514,7 @@ class DLM_OT_tweak_remove_arm(Operator):
 class DLM_OT_tweak_bake_arm(Operator):
     bl_idname = "dlm.tweak_bake_arm"
     bl_label = "Bake Arm Tweaks"
+    bl_description = "Bake arm tweak constraints to keyframes and optionally remove constraints"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -516,6 +540,7 @@ class DLM_OT_tweak_bake_arm(Operator):
 class DLM_OT_tweak_add_leg(Operator):
     bl_idname = "dlm.tweak_add_leg"
     bl_label = "Add Leg Tweaks"
+    bl_description = "Add tweak bone constraints to leg bones on the replacement character"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -533,6 +558,7 @@ class DLM_OT_tweak_add_leg(Operator):
 class DLM_OT_tweak_remove_leg(Operator):
     bl_idname = "dlm.tweak_remove_leg"
     bl_label = "Remove Leg Tweaks"
+    bl_description = "Remove leg tweak constraints from the replacement character"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -550,6 +576,7 @@ class DLM_OT_tweak_remove_leg(Operator):
 class DLM_OT_tweak_bake_leg(Operator):
     bl_idname = "dlm.tweak_bake_leg"
     bl_label = "Bake Leg Tweaks"
+    bl_description = "Bake leg tweak constraints to keyframes and optionally remove constraints"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -575,6 +602,7 @@ class DLM_OT_tweak_bake_leg(Operator):
 class DLM_OT_tweak_add_both(Operator):
     bl_idname = "dlm.tweak_add_both"
     bl_label = "Add Arm & Leg Tweaks"
+    bl_description = "Add tweak bone constraints to both arm and leg bones"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -592,6 +620,7 @@ class DLM_OT_tweak_add_both(Operator):
 class DLM_OT_tweak_remove_both(Operator):
     bl_idname = "dlm.tweak_remove_both"
     bl_label = "Remove Arm & Leg Tweaks"
+    bl_description = "Remove all arm and leg tweak constraints from the replacement character"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -609,6 +638,7 @@ class DLM_OT_tweak_remove_both(Operator):
 class DLM_OT_tweak_bake_both(Operator):
     bl_idname = "dlm.tweak_bake_both"
     bl_label = "Bake Arm & Leg Tweaks"
+    bl_description = "Bake all arm and leg tweak constraints to keyframes and optionally remove constraints"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod

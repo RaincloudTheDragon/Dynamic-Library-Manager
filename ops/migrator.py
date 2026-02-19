@@ -37,8 +37,8 @@ def get_pair_automatic(context):
     return pairs[0] if pairs else (None, None)
 
 
-def run_step_1(orig, rep):
-    """Copy armature object attributes: location, rotation, scale."""
+def run_copy_attr(orig, rep):
+    """Copy armature object attributes: location, rotation, scale (CopyAttr)."""
     rep.location = orig.location.copy()
     if orig.rotation_mode == "QUATERNION":
         rep.rotation_quaternion = orig.rotation_quaternion.copy()
@@ -64,8 +64,8 @@ def _mirror_als_turn_on(orig, rep):
             pass
 
 
-def run_step_2(orig, rep):
-    """Migrate NLA: copy tracks and strips to replacement; or apply active action only."""
+def run_mig_nla(orig, rep):
+    """Migrate NLA: copy tracks and strips to replacement; or apply active action only (MigNLA)."""
     if not orig.animation_data:
         return
     ad = orig.animation_data
@@ -127,7 +127,7 @@ def run_step_2(orig, rep):
 EXCLUDE_PROPS = {"_RNA_UI", "rigify_type", "rigify_parameters"}
 
 
-def run_step_3(orig, rep):
+def run_mig_cust_props(orig, rep):
     """Custom properties: copy pose-bone custom props, exclude rigify internals."""
     for pbone in orig.pose.bones:
         if pbone.name not in rep.pose.bones:
@@ -142,7 +142,7 @@ def run_step_3(orig, rep):
                 pass
 
 
-def run_step_4(orig, rep, orig_to_rep):
+def run_mig_bone_const(orig, rep, orig_to_rep):
     """Bone constraints: remove stale on rep, copy from orig with retarget, trim duplicates."""
     other_originals = [o for o in orig_to_rep if o != orig]
     for pb in rep.pose.bones:
@@ -181,7 +181,7 @@ def run_step_4(orig, rep, orig_to_rep):
             rr.remove(rr[-1])
 
 
-def run_step_5(orig, rep, rep_descendants, orig_to_rep):
+def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
     """Retarget relations: parents, constraint targets, Armature modifiers to rep."""
     candidates = set(rep_descendants)
     for ob in bpy.data.objects:
@@ -255,7 +255,7 @@ def _find_base_body(armature, descendants_iter, rep_base_name=None):
     return candidates[0]
 
 
-def run_step_6(orig, rep, rep_descendants, context=None):
+def run_mig_bbody_shapekeys(orig, rep, rep_descendants, context=None):
     """Replacement base body: library override (fully editable when context given), copy shapekey values, then shape-key action."""
     orig_descendants = list(descendants(orig))
     for ob in list(rep_descendants):
@@ -366,12 +366,12 @@ def run_full_migration(context):
     rep_descendants = descendants(rep)
 
     try:
-        run_step_1(orig, rep)
-        run_step_2(orig, rep)
-        run_step_3(orig, rep)
-        run_step_4(orig, rep, orig_to_rep)
-        run_step_5(orig, rep, rep_descendants, orig_to_rep)
-        run_step_6(orig, rep, rep_descendants, context)
+        run_copy_attr(orig, rep)
+        run_mig_nla(orig, rep)
+        run_mig_cust_props(orig, rep)
+        run_mig_bone_const(orig, rep, orig_to_rep)
+        run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep)
+        run_mig_bbody_shapekeys(orig, rep, rep_descendants, context)
     except Exception as e:
         return False, str(e)
     return True, f"Migrated {orig.name} → {rep.name}"
