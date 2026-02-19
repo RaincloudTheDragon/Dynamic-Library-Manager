@@ -356,8 +356,65 @@ def run_mig_cust_props(orig, rep):
                     print(f"[DLM MigCustProps]   Settings[{k!r}] = {v!r}")
 
 
+def _retarget_id(ob, orig, rep, orig_to_rep):
+    """Return rep, orig_to_rep[ob], or ob so constraint targets point to replacement when appropriate."""
+    if ob is None:
+        return None
+    if ob == orig:
+        return rep
+    return orig_to_rep.get(ob, ob)
+
+
+def _copy_constraint_props(c, nc, orig, rep, orig_to_rep):
+    """Copy all copyable RNA properties from c to nc, retargeting object/armature pointers."""
+    for rna_prop in c.bl_rna.properties:
+        if rna_prop.is_readonly or rna_prop.identifier in ("name", "type"):
+            continue
+        if not hasattr(nc, rna_prop.identifier):
+            continue
+        try:
+            val = getattr(c, rna_prop.identifier)
+        except Exception:
+            continue
+        rna_type = getattr(rna_prop, "type", None)
+        if rna_type == "POINTER":
+            setattr(nc, rna_prop.identifier, _retarget_id(val, orig, rep, orig_to_rep))
+        elif rna_type == "COLLECTION":
+            # e.g. ArmatureConstraint.targets: ensure count then copy item props (target, subtarget, weight)
+            try:
+                dst_coll = getattr(nc, rna_prop.identifier)
+                src_coll = getattr(c, rna_prop.identifier)
+                add_fn = getattr(dst_coll, "add", None) or getattr(dst_coll, "new", None)
+                for i in range(len(src_coll)):
+                    if i >= len(dst_coll) and add_fn:
+                        add_fn()
+                for i, src_item in enumerate(src_coll):
+                    if i >= len(dst_coll):
+                        break
+                    dst_item = dst_coll[i]
+                    for p in dst_item.bl_rna.properties:
+                        if p.is_readonly or p.identifier == "name":
+                            continue
+                        if not hasattr(dst_item, p.identifier):
+                            continue
+                        try:
+                            v = getattr(src_item, p.identifier)
+                            if getattr(p, "type", None) == "POINTER":
+                                v = _retarget_id(v, orig, rep, orig_to_rep)
+                            setattr(dst_item, p.identifier, v)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        else:
+            try:
+                setattr(nc, rna_prop.identifier, val)
+            except Exception:
+                pass
+
+
 def run_mig_bone_const(orig, rep, orig_to_rep):
-    """Bone constraints: remove stale on rep, copy from orig with retarget, trim duplicates."""
+    """Bone constraints: remove stale on rep, copy from orig with full props (targets, etc.) and retarget, trim duplicates."""
     other_originals = [o for o in orig_to_rep if o != orig]
     for pb in rep.pose.bones:
         to_remove = [c for c in pb.constraints if getattr(c, "target", None) in other_originals]
@@ -368,25 +425,9 @@ def run_mig_bone_const(orig, rep, orig_to_rep):
             continue
         rbone = rep.pose.bones[pbone.name]
         for c in pbone.constraints:
-            if getattr(c, "target", None) == orig:
-                continue
             nc = rbone.constraints.new(type=c.type)
             nc.name = c.name
-            nc.mute = c.mute
-            nc.influence = c.influence
-            t = getattr(c, "target", None)
-            if t is not None and t in orig_to_rep:
-                nc.target = orig_to_rep[t]
-            elif getattr(nc, "target", None) is not None and t:
-                nc.target = t
-            if hasattr(c, "subtarget") and c.subtarget:
-                nc.subtarget = c.subtarget
-            for prop in ("head_tail", "use_bone_object", "invert_x", "invert_y", "invert_z"):
-                if hasattr(c, prop):
-                    try:
-                        setattr(nc, prop, getattr(c, prop))
-                    except Exception:
-                        pass
+            _copy_constraint_props(c, nc, orig, rep, orig_to_rep)
     for pb in orig.pose.bones:
         if pb.name not in rep.pose.bones:
             continue
