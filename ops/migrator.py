@@ -7,7 +7,7 @@
 
 import bpy
 
-from ..utils import descendants
+from ..utils import descendants, collection_containing_armature
 
 
 def get_pair_manual(context):
@@ -151,13 +151,64 @@ def run_step_5(orig, rep, rep_descendants, orig_to_rep):
                     m.object = rep
 
 
+def _base_body_name_match(ob):
+    """True if object looks like the base body mesh (MESH, name has body+base)."""
+    if ob.type != "MESH":
+        return False
+    name_lower = (ob.name + " " + (ob.data.name if ob.data else "")).lower()
+    return "body" in name_lower and "base" in name_lower
+
+
+def _objects_in_collection_recursive(coll):
+    """Yield all objects in collection and nested collections."""
+    for ob in coll.objects:
+        yield ob
+    for child in coll.children:
+        yield from _objects_in_collection_recursive(child)
+
+
+def _find_base_body(armature, descendants_iter, rep_base_name=None):
+    """Return the base body mesh: in descendants (armature mod), or in armature's collection(s), matched by name."""
+    def gather_candidates(ob_iter):
+        candidates = []
+        for ob in ob_iter:
+            if not _base_body_name_match(ob):
+                continue
+            if ob.modifiers:
+                for m in ob.modifiers:
+                    if m.type == "ARMATURE" and m.object == armature:
+                        return ob, candidates
+            candidates.append(ob)
+        return None, candidates
+
+    found, candidates = gather_candidates(descendants_iter)
+    if found:
+        return found
+    # Fallback: base body may be in same collection as armature but not parented to it (e.g. linked).
+    if not candidates:
+        for coll in [collection_containing_armature(armature)] + list(getattr(armature, "users_collection", []) or []):
+            if not coll:
+                continue
+            found, candidates = gather_candidates(_objects_in_collection_recursive(coll))
+            if found:
+                return found
+            if candidates:
+                break
+    if not candidates:
+        return None
+    if rep_base_name:
+        base = rep_base_name.rsplit(".", 1)[0] if "." in rep_base_name else rep_base_name
+        for ob in candidates:
+            if ob.name == base or ob.name.startswith(base + ".") or (ob.data and ob.data.name == base):
+                return ob
+    return candidates[0]
+
+
 def run_step_6(orig, rep, rep_descendants, context=None):
-    """Replacement base body: library override (fully editable when context given), then shape-key action."""
+    """Replacement base body: library override (fully editable when context given), copy shapekey values, then shape-key action."""
+    orig_descendants = list(descendants(orig))
     for ob in list(rep_descendants):
-        if ob.type != "MESH":
-            continue
-        name_lower = (ob.name + " " + (ob.data.name if ob.data else "")).lower()
-        if "body" not in name_lower or "base" not in name_lower:
+        if not _base_body_name_match(ob):
             continue
         if ob.modifiers:
             for m in ob.modifiers:
@@ -165,6 +216,7 @@ def run_step_6(orig, rep, rep_descendants, context=None):
                     break
             else:
                 continue
+        orig_base = _find_base_body(orig, orig_descendants, rep_base_name=ob.name)
         # Debug: base body mesh state before override handling.
         _lib = getattr(ob.data, "library", None)
         _ol = getattr(ob.data, "override_library", None)
@@ -211,6 +263,29 @@ def run_step_6(orig, rep, rep_descendants, context=None):
         _sys2 = getattr(_ol2, "is_system_override", None) if _ol2 else None
         print(f"[DLM step6] {ob.name} after: override={_ol2 is not None}, is_system_override={_sys2} (False=editable)")
         if ob.data.shape_keys:
+            # Ensure we can write shape key values: override the Key block if it is linked.
+            sk = ob.data.shape_keys
+            if getattr(sk, "library", None):
+                try:
+                    sk.override_create(remap_local_usages=True)
+                except Exception as e:
+                    print(f"[DLM step6] {ob.name} shape_keys.override_create: {e}")
+            # Copy shape key values from original base body to replacement (by matching key name).
+            if orig_base and orig_base.data.shape_keys:
+                rep_blocks = ob.data.shape_keys.key_blocks
+                orig_blocks = orig_base.data.shape_keys.key_blocks
+                n_copied = 0
+                for orig_key in orig_blocks:
+                    rep_key = rep_blocks.get(orig_key.name)
+                    if rep_key is not None:
+                        rep_key.value = orig_key.value
+                        n_copied += 1
+                print(f"[DLM step6] {ob.name} shapekey values: copied {n_copied}/{len(orig_blocks)} from {orig_base.name}")
+            else:
+                if not orig_base:
+                    print(f"[DLM step6] {ob.name} no orig base body found for armature {orig.name}")
+                elif not orig_base.data.shape_keys:
+                    print(f"[DLM step6] {ob.name} orig base body has no shape_keys")
             if not ob.data.shape_keys.animation_data:
                 ob.data.shape_keys.animation_data_create()
             body_name = ob.name
