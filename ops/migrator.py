@@ -151,9 +151,9 @@ def run_step_5(orig, rep, rep_descendants, orig_to_rep):
                     m.object = rep
 
 
-def run_step_6(orig, rep, rep_descendants):
-    """Replacement base body: library override only, then shape-key action."""
-    for ob in rep_descendants:
+def run_step_6(orig, rep, rep_descendants, context=None):
+    """Replacement base body: library override (fully editable when context given), then shape-key action."""
+    for ob in list(rep_descendants):
         if ob.type != "MESH":
             continue
         name_lower = (ob.name + " " + (ob.data.name if ob.data else "")).lower()
@@ -165,11 +165,51 @@ def run_step_6(orig, rep, rep_descendants):
                     break
             else:
                 continue
-        if getattr(ob.data, "library", None) or getattr(ob.data, "override_library", None):
+        # Debug: base body mesh state before override handling.
+        _lib = getattr(ob.data, "library", None)
+        _ol = getattr(ob.data, "override_library", None)
+        _sys = getattr(_ol, "is_system_override", None) if _ol else None
+        print(f"[DLM step6] {ob.name} data: linked={_lib is not None}, override={_ol is not None}, is_system_override={_sys}")
+        # Library override: use hierarchy create (fully editable) when context available, else single-id override.
+        if getattr(ob, "library", None):
+            if context:
+                try:
+                    ob = ob.override_hierarchy_create(
+                        context.scene, context.view_layer, do_fully_editable=True
+                    )
+                except Exception:
+                    try:
+                        ob.override_create()
+                    except Exception:
+                        pass
+            else:
+                try:
+                    ob.override_create()
+                except Exception:
+                    pass
+        if getattr(ob.data, "library", None):
             try:
-                ob.data.override_create()
-            except Exception:
-                pass
+                ob.data.override_create(remap_local_usages=True)
+                # Make override user-editable (same as shift-click in data tab).
+                ol = getattr(ob.data, "override_library", None)
+                if ol is not None and getattr(ol, "is_system_override", None) is not None:
+                    try:
+                        ol.is_system_override = False
+                    except Exception as e:
+                        print(f"[DLM step6] {ob.name} set is_system_override=False: {e}")
+            except Exception as e:
+                print(f"[DLM step6] {ob.name} ob.data.override_create: {e}")
+        elif getattr(ob.data, "override_library", None):
+            ol = ob.data.override_library
+            if getattr(ol, "is_system_override", False):
+                try:
+                    ol.is_system_override = False
+                except Exception as e:
+                    print(f"[DLM step6] {ob.name} set is_system_override=False: {e}")
+        # Debug: state after override handling.
+        _ol2 = getattr(ob.data, "override_library", None)
+        _sys2 = getattr(_ol2, "is_system_override", None) if _ol2 else None
+        print(f"[DLM step6] {ob.name} after: override={_ol2 is not None}, is_system_override={_sys2} (False=editable)")
         if ob.data.shape_keys:
             if not ob.data.shape_keys.animation_data:
                 ob.data.shape_keys.animation_data_create()
@@ -205,7 +245,7 @@ def run_full_migration(context):
         run_step_3(orig, rep)
         run_step_4(orig, rep, orig_to_rep)
         run_step_5(orig, rep, rep_descendants, orig_to_rep)
-        run_step_6(orig, rep, rep_descendants)
+        run_step_6(orig, rep, rep_descendants, context)
     except Exception as e:
         return False, str(e)
     return True, f"Migrated {orig.name} → {rep.name}"

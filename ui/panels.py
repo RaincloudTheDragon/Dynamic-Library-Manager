@@ -92,7 +92,7 @@ class DLM_PT_main_panel(Panel):
         row = box.row(align=True)
         row.operator("dlm.migrator_bone_constraints", text="Bone constraints")
         row.operator("dlm.migrator_retarget_relations", text="Retarget relations")
-        row.operator("dlm.migrator_replacement_base_body", text="Replacement base body")
+        row.operator("dlm.migrator_basebody_shapekeys", text="Migrate BaseBody shapekeys")
 
         # Linked Libraries: header row (always), main box only when expanded
         missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)

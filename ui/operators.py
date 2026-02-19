@@ -358,9 +358,9 @@ class DLM_OT_migrator_retarget_relations(Operator):
             return {"CANCELLED"}
 
 
-class DLM_OT_migrator_replacement_base_body(Operator):
-    bl_idname = "dlm.migrator_replacement_base_body"
-    bl_label = "Replacement base body"
+class DLM_OT_migrator_basebody_shapekeys(Operator):
+    bl_idname = "dlm.migrator_basebody_shapekeys"
+    bl_label = "Migrate BaseBody shapekeys"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -372,8 +372,8 @@ class DLM_OT_migrator_replacement_base_body(Operator):
             from ..ops.migrator import run_step_6
             from ..utils import descendants
             rep_descendants = descendants(rep)
-            run_step_6(orig, rep, rep_descendants)
-            self.report({"INFO"}, "Replacement base body done.")
+            run_step_6(orig, rep, rep_descendants, context)
+            self.report({"INFO"}, "Migrate BaseBody shapekeys done.")
             return {"FINISHED"}
         except Exception as e:
             self.report({"ERROR"}, str(e))
@@ -386,7 +386,7 @@ MIGRATOR_STEP_OPS = (
     "dlm.migrator_custom_properties",
     "dlm.migrator_bone_constraints",
     "dlm.migrator_retarget_relations",
-    "dlm.migrator_replacement_base_body",
+    "dlm.migrator_basebody_shapekeys",
 )
 
 
@@ -402,7 +402,7 @@ class DLM_OT_run_character_migration(Operator):
             bpy.ops.dlm.migrator_custom_properties,
             bpy.ops.dlm.migrator_bone_constraints,
             bpy.ops.dlm.migrator_retarget_relations,
-            bpy.ops.dlm.migrator_replacement_base_body,
+            bpy.ops.dlm.migrator_basebody_shapekeys,
         ]
         for i, op in enumerate(steps):
             result = op()
@@ -464,5 +464,5 @@ OPERATOR_CLASSES = [
     DLM_OT_migrator_custom_properties,
     DLM_OT_migrator_bone_constraints,
     DLM_OT_migrator_retarget_relations,
-    DLM_OT_migrator_replacement_base_body,
+    DLM_OT_migrator_basebody_shapekeys,
 ]
