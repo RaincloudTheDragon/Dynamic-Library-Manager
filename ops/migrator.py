@@ -596,14 +596,37 @@ def run_mig_bbody_shapekeys(orig, rep, rep_descendants, context=None):
                     print(f"[DLM step6] {ob.name} orig base body has no shape_keys")
             if not ob.data.shape_keys.animation_data:
                 ob.data.shape_keys.animation_data_create()
-            body_name = ob.name
-            action = (
-                bpy.data.actions.get(body_name + "Action")
-                or bpy.data.actions.get(ob.data.name + "Action")
-                or bpy.data.actions.get(body_name + "Action.001")
-            )
+            sk_ad = ob.data.shape_keys.animation_data
+            # Prefer action (and slot) from original base body; fallback to name lookup.
+            orig_sk_ad = None
+            if orig_base and orig_base.data.shape_keys:
+                orig_sk_ad = orig_base.data.shape_keys.animation_data
+            action = None
+            if orig_sk_ad and getattr(orig_sk_ad, "action", None):
+                action = orig_sk_ad.action
+            if action is None:
+                body_name = ob.name
+                action = (
+                    bpy.data.actions.get(body_name + "Action")
+                    or bpy.data.actions.get(ob.data.name + "Action")
+                    or bpy.data.actions.get(body_name + "Action.001")
+                )
             if action:
-                ob.data.shape_keys.animation_data.action = action
+                # Copy slot-related props before action so slot is applied (Blender 4.4+).
+                if orig_sk_ad and hasattr(sk_ad, "last_slot_identifier") and hasattr(orig_sk_ad, "last_slot_identifier") and orig_sk_ad.last_slot_identifier:
+                    sk_ad.last_slot_identifier = orig_sk_ad.last_slot_identifier
+                sk_ad.action = action
+                if orig_sk_ad and getattr(orig_sk_ad, "action_slot", None) and getattr(sk_ad, "action_slot", None):
+                    try:
+                        sk_ad.action_slot = orig_sk_ad.action_slot
+                    except Exception:
+                        pass
+                for prop in ("action_blend_type", "action_extrapolation", "action_influence"):
+                    if orig_sk_ad and hasattr(orig_sk_ad, prop) and hasattr(sk_ad, prop):
+                        try:
+                            setattr(sk_ad, prop, getattr(orig_sk_ad, prop))
+                        except Exception:
+                            pass
 
 
 def run_full_migration(context):
