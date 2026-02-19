@@ -449,6 +449,188 @@ class DLM_OT_picker_replacement_character(Operator):
         return {"FINISHED"}
 
 
+def _tweak_poll(context):
+    orig, rep = _get_migrator_pair(context)
+    return orig is not None and rep is not None
+
+
+class DLM_OT_tweak_add_arm(Operator):
+    bl_idname = "dlm.tweak_add_arm"
+    bl_label = "Add Arm Tweaks"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _tweak_poll(context)
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        from ..ops import tweak_tools
+        tweak_tools.add_tweak_constraints(orig, rep, "arm")
+        self.report({"INFO"}, "Arm tweak constraints added.")
+        return {"FINISHED"}
+
+
+class DLM_OT_tweak_remove_arm(Operator):
+    bl_idname = "dlm.tweak_remove_arm"
+    bl_label = "Remove Arm Tweaks"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _tweak_poll(context)
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        from ..ops import tweak_tools
+        n = tweak_tools.remove_tweak_constraints(orig, rep, "arm")
+        self.report({"INFO"}, f"Removed {n} arm tweak constraints.")
+        return {"FINISHED"}
+
+
+class DLM_OT_tweak_bake_arm(Operator):
+    bl_idname = "dlm.tweak_bake_arm"
+    bl_label = "Bake Arm Tweaks"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _tweak_poll(context)
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        props = context.scene.dynamic_link_manager
+        from ..ops import tweak_tools
+        ok, msg = tweak_tools.bake_tweak_constraints(
+            context, orig, rep, "arm",
+            getattr(props, "tweak_nla_track_name", "") or "",
+            getattr(props, "tweak_bake_post_clean", False),
+        )
+        if ok:
+            self.report({"INFO"}, msg)
+            return {"FINISHED"}
+        self.report({"ERROR"}, msg)
+        return {"CANCELLED"}
+
+
+class DLM_OT_tweak_add_leg(Operator):
+    bl_idname = "dlm.tweak_add_leg"
+    bl_label = "Add Leg Tweaks"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _tweak_poll(context)
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        from ..ops import tweak_tools
+        tweak_tools.add_tweak_constraints(orig, rep, "leg")
+        self.report({"INFO"}, "Leg tweak constraints added.")
+        return {"FINISHED"}
+
+
+class DLM_OT_tweak_remove_leg(Operator):
+    bl_idname = "dlm.tweak_remove_leg"
+    bl_label = "Remove Leg Tweaks"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _tweak_poll(context)
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        from ..ops import tweak_tools
+        n = tweak_tools.remove_tweak_constraints(orig, rep, "leg")
+        self.report({"INFO"}, f"Removed {n} leg tweak constraints.")
+        return {"FINISHED"}
+
+
+class DLM_OT_tweak_bake_leg(Operator):
+    bl_idname = "dlm.tweak_bake_leg"
+    bl_label = "Bake Leg Tweaks"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _tweak_poll(context)
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        props = context.scene.dynamic_link_manager
+        from ..ops import tweak_tools
+        ok, msg = tweak_tools.bake_tweak_constraints(
+            context, orig, rep, "leg",
+            getattr(props, "tweak_nla_track_name", "") or "",
+            getattr(props, "tweak_bake_post_clean", False),
+        )
+        if ok:
+            self.report({"INFO"}, msg)
+            return {"FINISHED"}
+        self.report({"ERROR"}, msg)
+        return {"CANCELLED"}
+
+
+class DLM_OT_tweak_add_both(Operator):
+    bl_idname = "dlm.tweak_add_both"
+    bl_label = "Add Arm & Leg Tweaks"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _tweak_poll(context)
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        from ..ops import tweak_tools
+        tweak_tools.add_tweak_constraints(orig, rep, "both")
+        self.report({"INFO"}, "Arm & leg tweak constraints added.")
+        return {"FINISHED"}
+
+
+class DLM_OT_tweak_remove_both(Operator):
+    bl_idname = "dlm.tweak_remove_both"
+    bl_label = "Remove Arm & Leg Tweaks"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _tweak_poll(context)
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        from ..ops import tweak_tools
+        n = tweak_tools.remove_tweak_constraints(orig, rep, "both")
+        self.report({"INFO"}, f"Removed {n} tweak constraints.")
+        return {"FINISHED"}
+
+
+class DLM_OT_tweak_bake_both(Operator):
+    bl_idname = "dlm.tweak_bake_both"
+    bl_label = "Bake Arm & Leg Tweaks"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _tweak_poll(context)
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        props = context.scene.dynamic_link_manager
+        from ..ops import tweak_tools
+        ok, msg = tweak_tools.bake_tweak_constraints(
+            context, orig, rep, "both",
+            getattr(props, "tweak_nla_track_name", "") or "",
+            getattr(props, "tweak_bake_post_clean", False),
+        )
+        if ok:
+            self.report({"INFO"}, msg)
+            return {"FINISHED"}
+        self.report({"ERROR"}, msg)
+        return {"CANCELLED"}
+
+
 OPERATOR_CLASSES = [
     DLM_OT_replace_linked_asset,
     DLM_OT_scan_linked_assets,
@@ -471,4 +653,13 @@ OPERATOR_CLASSES = [
     DLM_OT_migrator_bone_constraints,
     DLM_OT_migrator_retarget_relations,
     DLM_OT_migrator_basebody_shapekeys,
+    DLM_OT_tweak_add_arm,
+    DLM_OT_tweak_remove_arm,
+    DLM_OT_tweak_bake_arm,
+    DLM_OT_tweak_add_leg,
+    DLM_OT_tweak_remove_leg,
+    DLM_OT_tweak_bake_leg,
+    DLM_OT_tweak_add_both,
+    DLM_OT_tweak_remove_both,
+    DLM_OT_tweak_bake_both,
 ]

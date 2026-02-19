@@ -59,3 +59,15 @@ class DynamicLinkManagerProperties(PropertyGroup):
         type=bpy.types.Object,
         poll=lambda self, obj: obj and obj.type == "ARMATURE",
     )
+
+    # Tweak tools (bake frame range and post-clean)
+    tweak_nla_track_name: StringProperty(
+        name="NLA Track (bake range)",
+        description="If set, bake uses this NLA track on the replacement armature for frame range; else scene range",
+        default="",
+    )
+    tweak_bake_post_clean: BoolProperty(
+        name="Post-clean after bake",
+        description="Run action clean keyframes and graph decimate (error 0.001) after baking",
+        default=False,
+    )

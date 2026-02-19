@@ -94,6 +94,26 @@ class DLM_PT_main_panel(Panel):
         row.operator("dlm.migrator_retarget_relations", text="Retarget relations", icon="ORIENTATION_PARENT")
         row.operator("dlm.migrator_basebody_shapekeys", text="BaseBody ShapeKeys", icon="SHAPEKEY_DATA")
 
+        # Tweak Tools
+        tweak_box = layout.box()
+        tweak_box.label(text="Tweak Tools", icon="CONSTRAINT")
+        row = tweak_box.row(align=True)
+        row.operator("dlm.tweak_add_arm", text="Add Arm", icon="CONSTRAINT_BONE")
+        row.operator("dlm.tweak_remove_arm", text="Remove Arm", icon="X")
+        row.operator("dlm.tweak_bake_arm", text="Bake Arm", icon="KEYFRAME")
+        row = tweak_box.row(align=True)
+        row.operator("dlm.tweak_add_leg", text="Add Leg", icon="CONSTRAINT_BONE")
+        row.operator("dlm.tweak_remove_leg", text="Remove Leg", icon="X")
+        row.operator("dlm.tweak_bake_leg", text="Bake Leg", icon="KEYFRAME")
+        row = tweak_box.row(align=True)
+        row.operator("dlm.tweak_add_both", text="Add Both", icon="CONSTRAINT_BONE")
+        row.operator("dlm.tweak_remove_both", text="Remove Both", icon="X")
+        row.operator("dlm.tweak_bake_both", text="Bake Both", icon="KEYFRAME")
+        row = tweak_box.row()
+        row.prop(props, "tweak_nla_track_name", text="NLA track")
+        row = tweak_box.row()
+        row.prop(props, "tweak_bake_post_clean", text="Post-clean after bake")
+
         # Linked Libraries: header row (always), main box only when expanded
         missing_count = sum(1 for lib in props.linked_libraries if lib.is_missing)
         section_icon = "DISCLOSURE_TRI_DOWN" if props.linked_libraries_section_expanded else "DISCLOSURE_TRI_RIGHT"
