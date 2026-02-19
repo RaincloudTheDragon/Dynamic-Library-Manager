@@ -47,30 +47,81 @@ def run_step_1(orig, rep):
     rep.scale = orig.scale.copy()
 
 
+def _mirror_als_turn_on(orig, rep):
+    """Mirror als.turn_on (animation layers) from original to replacement armature."""
+    key = "als.turn_on"
+    if key in orig:
+        try:
+            rep[key] = orig[key]
+        except Exception:
+            pass
+    for pbone in orig.pose.bones:
+        if pbone.name not in rep.pose.bones or key not in pbone:
+            continue
+        try:
+            rep.pose.bones[pbone.name][key] = pbone[key]
+        except Exception:
+            pass
+
+
 def run_step_2(orig, rep):
-    """Migrate NLA: copy tracks and strips to replacement."""
-    if not orig.animation_data or not orig.animation_data.nla_tracks:
+    """Migrate NLA: copy tracks and strips to replacement; or apply active action only."""
+    if not orig.animation_data:
+        return
+    ad = orig.animation_data
+    has_nla = ad.nla_tracks and len(ad.nla_tracks) > 0
+    active_action = getattr(ad, "action", None)
+    if not has_nla and active_action:
+        if rep.animation_data is None:
+            rep.animation_data_create()
+        rep.animation_data.action = active_action
+        _mirror_als_turn_on(orig, rep)
+        return
+    if not has_nla:
         return
     if rep.animation_data is None:
         rep.animation_data_create()
-    for track in list(rep.animation_data.nla_tracks):
-        rep.animation_data.nla_tracks.remove(track)
-    prev_track = None
-    for track in orig.animation_data.nla_tracks:
-        new_track = rep.animation_data.nla_tracks.new(prev=prev_track)
-        new_track.name = track.name
+    rep_tracks = rep.animation_data.nla_tracks
+    existing_names = {t.name for t in rep_tracks}
+    prev_track = rep_tracks[-1] if rep_tracks else None
+    for track in ad.nla_tracks:
+        new_track = rep_tracks.new(prev=prev_track)
+        name = track.name
+        if name in existing_names:
+            base, n = name, 1
+            while f"{base}.{n:03d}" in existing_names:
+                n += 1
+            name = f"{base}.{n:03d}"
+        new_track.name = name
+        existing_names.add(name)
         new_track.mute = track.mute
         new_track.is_solo = track.is_solo
         new_track.lock = track.lock
         for strip in track.strips:
-            new_strip = new_track.strips.new(strip.name, int(strip.frame_start), strip.action)
+            if strip.type != "CLIP" or not strip.action:
+                continue
+            new_strip = new_track.strips.new(
+                strip.name, int(strip.frame_start), strip.action
+            )
             new_strip.blend_type = strip.blend_type
             new_strip.extrapolation = strip.extrapolation
             new_strip.frame_end = strip.frame_end
             new_strip.blend_in = strip.blend_in
             new_strip.blend_out = strip.blend_out
             new_strip.repeat = strip.repeat
+            new_strip.action_frame_start = strip.action_frame_start
+            new_strip.action_frame_end = strip.action_frame_end
+            new_strip.influence = strip.influence
+            new_strip.mute = strip.mute
+            new_strip.scale = strip.scale
+            new_strip.use_auto_blend = strip.use_auto_blend
+            new_strip.use_reverse = strip.use_reverse
+            new_strip.use_animated_influence = strip.use_animated_influence
+            new_strip.use_animated_time = strip.use_animated_time
+            new_strip.use_animated_time_cyclic = strip.use_animated_time_cyclic
+            new_strip.use_sync_length = strip.use_sync_length
         prev_track = new_track
+    _mirror_als_turn_on(orig, rep)
 
 
 EXCLUDE_PROPS = {"_RNA_UI", "rigify_type", "rigify_parameters"}
