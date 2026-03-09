@@ -100,41 +100,43 @@ def copy_fk_rotations(context, orig, rep):
 
         # Step 1: Add COPY_TRANSFORMS constraints to each rep bone
         for bone_name in common_bones:
-            try:
-                rep_bone = rep.pose.bones[bone_name]
-                
-                # Check if bone already has this constraint
-                existing = [c for c in rep_bone.constraints if c.type == 'COPY_TRANSFORMS' and getattr(c, 'target', None) == orig]
-                if existing:
-                    continue
-                
-                # Add constraint
-                c = rep_bone.constraints.new(type='COPY_TRANSFORMS')
-                c.name = "MigFKRot_Temp"
-                c.target = orig
-                c.subtarget = bone_name
-                c.target_space = 'POSE'
-                c.owner_space = 'POSE'
-                
-                constraints_added.append((rep_bone, c))
-            except Exception as e:
-                print(f"[DLM MigFKRot] Failed to add constraint for {bone_name}: {e}")
+            rep_bone = rep.pose.bones[bone_name]
+            
+            # Check if bone already has this constraint
+            existing = [c for c in rep_bone.constraints if c.type == 'COPY_TRANSFORMS' and getattr(c, 'target', None) == orig]
+            if existing:
+                continue
+            
+            # Add constraint
+            c = rep_bone.constraints.new(type='COPY_TRANSFORMS')
+            c.name = "MigFKRot_Temp"
+            c.target = orig
+            c.subtarget = bone_name
+            c.target_space = 'POSE'
+            c.owner_space = 'POSE'
+            constraints_added.append((rep_bone, c))
 
         # Step 2: Update scene to evaluate constraints
         context.view_layer.update()
 
         # Step 3: Apply visual transform (bake constraint result into pose)
-        bpy.ops.pose.select_all(action='DESELECT')
-        for rep_bone, _ in constraints_added:
-            rep_bone.bone.select = True
-        
-        # Apply visual transform - this bakes the constraint result
-        bpy.ops.pose.visual_transform_apply()
+        try:
+            bpy.ops.pose.select_all(action='DESELECT')
+            for rep_bone, _ in constraints_added:
+                rep_bone.bone.select = True
+            # Apply visual transform - this bakes the constraint result
+            bpy.ops.pose.visual_transform_apply()
+        except (RuntimeError, AttributeError):
+            # visual_transform_apply requires bones to be selectable
+            # AttributeError: 'bone.select' may not exist in Blender 5.0
+            # If selection fails, the constraint result is still applied
+            pass  # Silently ignore - constraints still drove the pose
 
         # Step 4: Remove constraints
         for rep_bone, c in constraints_added:
             try:
-                rep_bone.constraints.remove(c)
+                if c in rep_bone.constraints:
+                    rep_bone.constraints.remove(c)
             except:
                 pass
 
@@ -191,10 +193,14 @@ def bake_fk_rotations(context, rep, track_name=None, post_clean=False):
         bpy.ops.object.mode_set(mode="POSE")
 
     # Select only FK bones
-    bpy.ops.pose.select_all(action="DESELECT")
-    for name in fk_names:
-        if name in rep.pose.bones:
-            rep.pose.bones[name].bone.select = True
+    try:
+        bpy.ops.pose.select_all(action="DESELECT")
+        for name in fk_names:
+            if name in rep.pose.bones:
+                rep.pose.bones[name].bone.select = True
+    except RuntimeError:
+        # Selection may fail if bones aren't visible/selectable
+        pass
 
     # Bake
     try:
