@@ -184,8 +184,27 @@ def _mirror_als_turn_on(orig, rep):
             pass
 
 
+def _duplicate_action(src_action, suffix=".rep"):
+    """Duplicate an action, returning the new action with a unique name."""
+    if src_action is None:
+        return None
+    new_name = src_action.name
+    if not new_name.endswith(suffix):
+        new_name = f"{new_name}{suffix}"
+    # Ensure unique name
+    base_name = new_name
+    n = 1
+    while new_name in bpy.data.actions:
+        new_name = f"{base_name}.{n:03d}"
+        n += 1
+    new_action = src_action.copy()
+    new_action.name = new_name
+    return new_action
+
+
 def run_mig_nla(orig, rep, report=None):
-    """Migrate NLA: copy tracks and strips to replacement; or mirror action slot when no NLA (MigNLA)."""
+    """Migrate NLA: copy tracks and strips to replacement; or mirror action slot when no NLA (MigNLA).
+    Actions are duplicated so repchar has independent copies."""
     if not orig.animation_data:
         return
     ad = orig.animation_data
@@ -211,11 +230,13 @@ def run_mig_nla(orig, rep, report=None):
                     print(f"[DLM MigNLA]   {p}={v!r}")
         _slot_debug("Orig (before)", ad)
         _slot_debug("Rep (before)", rad)
+        # Duplicate the active action for repchar
+        dup_action = _duplicate_action(active_action, suffix=".rep")
         # Copy last_slot_identifier before action so slot is resolved when assigning (4.4+).
         if hasattr(ad, "last_slot_identifier") and hasattr(rad, "last_slot_identifier") and ad.last_slot_identifier:
             rad.last_slot_identifier = ad.last_slot_identifier
             print(f"[DLM MigNLA] set rep last_slot_identifier={ad.last_slot_identifier!r}")
-        rad.action = active_action
+        rad.action = dup_action
         # Copy Action Slot and related props (Blender 4.4+ slotted actions).
         if getattr(ad, "action_slot", None) and getattr(rad, "action_slot", None):
             try:
@@ -230,7 +251,7 @@ def run_mig_nla(orig, rep, report=None):
         _slot_debug("Rep (after)", rad)
         _mirror_als_turn_on(orig, rep)
         if report:
-            report({"INFO"}, "No NLA detected, active action and slot copied to Replacement Armature.")
+            report({"INFO"}, "No NLA detected, active action (duplicated) and slot copied to Replacement Armature.")
         return
     if rep.animation_data is None:
         rep.animation_data_create()
@@ -253,8 +274,9 @@ def run_mig_nla(orig, rep, report=None):
         for strip in track.strips:
             if strip.type != "CLIP" or not strip.action:
                 continue
+            dup_action = _duplicate_action(strip.action, suffix=".rep")
             new_strip = new_track.strips.new(
-                strip.name, int(strip.frame_start), strip.action
+                strip.name, int(strip.frame_start), dup_action
             )
             new_strip.blend_type = strip.blend_type
             new_strip.extrapolation = strip.extrapolation
@@ -612,10 +634,12 @@ def run_mig_bbody_shapekeys(orig, rep, rep_descendants, context=None):
                     or bpy.data.actions.get(body_name + "Action.001")
                 )
             if action:
+                # Duplicate action so repchar has independent copy
+                dup_action = _duplicate_action(action, suffix=".rep")
                 # Copy slot-related props before action so slot is applied (Blender 4.4+).
                 if orig_sk_ad and hasattr(sk_ad, "last_slot_identifier") and hasattr(orig_sk_ad, "last_slot_identifier") and orig_sk_ad.last_slot_identifier:
                     sk_ad.last_slot_identifier = orig_sk_ad.last_slot_identifier
-                sk_ad.action = action
+                sk_ad.action = dup_action
                 if orig_sk_ad and getattr(orig_sk_ad, "action_slot", None) and getattr(sk_ad, "action_slot", None):
                     try:
                         sk_ad.action_slot = orig_sk_ad.action_slot

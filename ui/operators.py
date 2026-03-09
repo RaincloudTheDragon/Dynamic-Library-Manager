@@ -403,6 +403,32 @@ class DLM_OT_migrator_basebody_shapekeys(Operator):
             return {"CANCELLED"}
 
 
+class DLM_OT_migrator_fk_rotations(Operator):
+    bl_idname = "dlm.migrator_fk_rotations"
+    bl_label = "MigFKRot"
+    bl_description = "Copy FK arm and finger rotations from original to replacement (uses copy_pose_vis_rot)"
+    bl_icon = "BONE_DATA"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        if not orig or not rep or orig == rep:
+            self.report({"ERROR"}, "No valid character pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.fk_rotations import copy_fk_rotations
+            ok, msg = copy_fk_rotations(context, orig, rep)
+            if ok:
+                self.report({"INFO"}, msg)
+                return {"FINISHED"}
+            else:
+                self.report({"ERROR"}, msg)
+                return {"CANCELLED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
 MIGRATOR_STEP_OPS = (
     "dlm.migrator_copy_attributes",
     "dlm.migrator_migrate_nla",
@@ -691,4 +717,5 @@ OPERATOR_CLASSES = [
     DLM_OT_tweak_add_both,
     DLM_OT_tweak_remove_both,
     DLM_OT_tweak_bake_both,
+    DLM_OT_migrator_fk_rotations,
 ]
