@@ -447,7 +447,33 @@ class DLM_OT_migrator_fk_rotations_bake(Operator):
             return {"CANCELLED"}
         try:
             from ..ops.fk_rotations import bake_fk_rotations
-            ok, msg = bake_fk_rotations(context, rep, track_name=self.track_name or None, post_clean=self.post_clean)
+            ok, msg = bake_fk_rotations(context, orig, rep, track_name=self.track_name or None, post_clean=self.post_clean)
+            if ok:
+                self.report({"INFO"}, msg)
+                return {"FINISHED"}
+            else:
+                self.report({"ERROR"}, msg)
+                return {"CANCELLED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_migrator_fk_rotations_remove(Operator):
+    bl_idname = "dlm.migrator_fk_rotations_remove"
+    bl_label = "Remove MigFKRot"
+    bl_description = "Remove FK rotation COPY_TRANSFORMS constraints (similar to tweak_remove_arm)"
+    bl_icon = "X"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        if not orig or not rep or orig == rep:
+            self.report({"ERROR"}, "No valid character pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.fk_rotations import remove_fk_rotations
+            ok, msg = remove_fk_rotations(context, rep)
             if ok:
                 self.report({"INFO"}, msg)
                 return {"FINISHED"}
@@ -749,4 +775,5 @@ OPERATOR_CLASSES = [
     DLM_OT_tweak_bake_both,
     DLM_OT_migrator_fk_rotations,
     DLM_OT_migrator_fk_rotations_bake,
+    DLM_OT_migrator_fk_rotations_remove,
 ]

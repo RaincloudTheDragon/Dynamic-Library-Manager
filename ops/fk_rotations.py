@@ -160,15 +160,20 @@ def copy_fk_rotations(context, orig, rep):
             context.view_layer.objects.active = original_active
 
 
-def bake_fk_rotations(context, rep, track_name=None, post_clean=False):
+def bake_fk_rotations(context, orig, rep, track_name=None, post_clean=False):
     """
     Bake FK arm/finger rotations to keyframes.
-    Similar to tweak_tools.bake_tweak_constraints but for FK bones.
+    Similar to tweak_tools.bake_tweak_constraints - adds constraints, bakes, then removes.
     Returns (True, message) or (False, error_message).
     """
     fk_names = _get_fk_bones(rep)
     if not fk_names:
         return False, f"No FK bones found on {rep.name}"
+
+    # Filter to bones that exist on both
+    common_bones = [n for n in fk_names if n in orig.pose.bones and n in rep.pose.bones]
+    if not common_bones:
+        return False, "No matching FK bones found on both armatures"
 
     scene = context.scene
     
@@ -192,36 +197,81 @@ def bake_fk_rotations(context, rep, track_name=None, post_clean=False):
     if rep.mode != "POSE":
         bpy.ops.object.mode_set(mode="POSE")
 
-    # Select only FK bones
+    # Step 1: Check for existing COPY_TRANSFORMS constraints from MigFKRot
+    constraints_added = []
+    for bone_name in common_bones:
+        rep_bone = rep.pose.bones[bone_name]
+        
+        # Check if already has constraint from MigFKRot
+        existing = [c for c in rep_bone.constraints if c.type == 'COPY_TRANSFORMS' and getattr(c, 'target', None) == orig]
+        if existing:
+            constraints_added.append((rep_bone, existing[0]))
+
+    print(f"[DLM MigFKRot Bake] Found {len(constraints_added)} existing constraints")
+
+    # Step 2: Select FK bones for baking
+    selected_count = 0
     try:
         bpy.ops.pose.select_all(action="DESELECT")
         for name in fk_names:
             if name in rep.pose.bones:
                 rep.pose.bones[name].bone.select = True
-    except RuntimeError:
-        # Selection may fail if bones aren't visible/selectable
-        pass
+                selected_count += 1
+    except (RuntimeError, AttributeError):
+        selected_count = 0  # Selection failed, will bake all
 
-    # Bake
+    # Step 3: Frame-by-frame bake (nla.bake with only_selected is unreliable in Blender 5.0)
+    print(f"[DLM MigFKRot Bake] Baking frames {frame_start}-{frame_end} for {len(common_bones)} bones")
     try:
-        bpy.ops.nla.bake(
-            frame_start=frame_start,
-            frame_end=frame_end,
-            step=1,
-            only_selected=True,
-            visual_keying=True,
-            clear_constraints=False,
-            clear_parents=False,
-            use_current_action=False,  # Create new action
-            clean_curves=False,
-            bake_types={"POSE"},
-            channel_types={"ROTATION"},
-        )
+        # Create action if needed
+        if not rep.animation_data:
+            rep.animation_data_create()
+        if not rep.animation_data.action:
+            action = bpy.data.actions.new(name=f"{rep.name}_FK_Baked")
+            rep.animation_data.action = action
+        
+        # Bake frame by frame
+        for frame in range(frame_start, frame_end + 1):
+            scene.frame_set(frame)
+            context.view_layer.update()
+            
+            for bone_name in common_bones:
+                rep_bone = rep.pose.bones[bone_name]
+                
+                # Insert keyframe based on rotation mode
+                if rep_bone.rotation_mode == 'QUATERNION':
+                    rep_bone.keyframe_insert(data_path="rotation_quaternion")
+                elif rep_bone.rotation_mode == 'AXIS_ANGLE':
+                    rep_bone.keyframe_insert(data_path="rotation_axis_angle")
+                else:
+                    rep_bone.keyframe_insert(data_path="rotation_euler")
+        
+        scene.frame_set(frame_start)  # Reset to start
+        print(f"[DLM MigFKRot Bake] Baked {frame_end - frame_start + 1} frames")
+        
     except Exception as e:
+        # Clean up constraints on failure
+        for rep_bone, c in constraints_added:
+            try:
+                if c in rep_bone.constraints:
+                    rep_bone.constraints.remove(c)
+            except:
+                pass
         return False, str(e)
+    
+    # Step 4: Remove the temporary constraints
+    removed = 0
+    for rep_bone, c in constraints_added:
+        try:
+            if c in rep_bone.constraints:
+                rep_bone.constraints.remove(c)
+                removed += 1
+        except:
+            pass
+    print(f"[DLM MigFKRot Bake] Removed {removed} constraints")
 
     if not post_clean:
-        return True, f"Baked {len(fk_names)} FK bones ({frame_start}-{frame_end})."
+        return True, f"Baked {len(common_bones)} FK bones ({frame_start}-{frame_end})."
 
     # Post-clean
     win = context.window
@@ -242,4 +292,30 @@ def bake_fk_rotations(context, rep, track_name=None, post_clean=False):
                     pass
             break
 
-    return True, f"Baked and cleaned {len(fk_names)} FK bones ({frame_start}-{frame_end})."
+    return True, f"Baked and cleaned {len(common_bones)} FK bones ({frame_start}-{frame_end})."
+
+
+def remove_fk_rotations(context, rep):
+    """
+    Remove COPY_TRANSFORMS constraints that were added by copy_fk_rotations.
+    Similar to tweak_tools.remove_tweak_constraints.
+    Returns (True, message) or (False, error_message).
+    """
+    fk_names = _get_fk_bones(rep)
+    if not fk_names:
+        return False, f"No FK bones found on {rep.name}"
+
+    removed = 0
+    for bone_name in fk_names:
+        if bone_name not in rep.pose.bones:
+            continue
+        rep_bone = rep.pose.bones[bone_name]
+        to_remove = [
+            c for c in rep_bone.constraints
+            if c.type == 'COPY_TRANSFORMS' and c.name == "MigFKRot_Temp"
+        ]
+        for c in to_remove:
+            rep_bone.constraints.remove(c)
+            removed += 1
+
+    return True, f"Removed {removed} FK rotation constraints."
