@@ -460,6 +460,16 @@ def run_mig_bone_const(orig, rep, orig_to_rep):
 
 def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
     """Retarget relations: parents, constraint targets, Armature modifiers to rep. Skip objects in orig's hierarchy (linked collection)."""
+    # Replicate orig's parent on rep if it exists (keep world transform)
+    if orig.parent is not None:
+        # Store world matrix before reparenting
+        world_matrix = rep.matrix_world.copy()
+        rep.parent = orig.parent
+        rep.parent_type = orig.parent_type
+        rep.parent_bone = orig.parent_bone
+        # Restore world matrix
+        rep.matrix_world = world_matrix
+
     orig_hierarchy = {orig} | descendants(orig)
     candidates = set(rep_descendants)
     for ob in bpy.data.objects:

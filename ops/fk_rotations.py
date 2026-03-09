@@ -156,3 +156,84 @@ def copy_fk_rotations(context, orig, rep):
         
         if original_active:
             context.view_layer.objects.active = original_active
+
+
+def bake_fk_rotations(context, rep, track_name=None, post_clean=False):
+    """
+    Bake FK arm/finger rotations to keyframes.
+    Similar to tweak_tools.bake_tweak_constraints but for FK bones.
+    Returns (True, message) or (False, error_message).
+    """
+    fk_names = _get_fk_bones(rep)
+    if not fk_names:
+        return False, f"No FK bones found on {rep.name}"
+
+    scene = context.scene
+    
+    # Get frame range from track or scene
+    frame_range = None
+    if track_name and rep.animation_data and rep.animation_data.nla_tracks:
+        track = rep.animation_data.nla_tracks.get(track_name)
+        if track and track.strips:
+            start = min(s.frame_start for s in track.strips)
+            end = max(s.frame_end for s in track.strips)
+            frame_range = (int(start), int(end))
+    
+    if not frame_range:
+        frame_range = (scene.frame_start, scene.frame_end)
+    
+    frame_start, frame_end = frame_range
+
+    # Ensure rep is active and in pose mode
+    if context.view_layer.objects.active != rep:
+        context.view_layer.objects.active = rep
+    if rep.mode != "POSE":
+        bpy.ops.object.mode_set(mode="POSE")
+
+    # Select only FK bones
+    bpy.ops.pose.select_all(action="DESELECT")
+    for name in fk_names:
+        if name in rep.pose.bones:
+            rep.pose.bones[name].bone.select = True
+
+    # Bake
+    try:
+        bpy.ops.nla.bake(
+            frame_start=frame_start,
+            frame_end=frame_end,
+            step=1,
+            only_selected=True,
+            visual_keying=True,
+            clear_constraints=False,
+            clear_parents=False,
+            use_current_action=False,  # Create new action
+            clean_curves=False,
+            bake_types={"POSE"},
+            channel_types={"ROTATION"},
+        )
+    except Exception as e:
+        return False, str(e)
+
+    if not post_clean:
+        return True, f"Baked {len(fk_names)} FK bones ({frame_start}-{frame_end})."
+
+    # Post-clean
+    win = context.window
+    for area in win.screen.areas:
+        if area.type == "DOPESHEET_EDITOR":
+            with context.temp_override(window=win, area=area):
+                try:
+                    bpy.ops.action.clean_keyframes()
+                except Exception:
+                    pass
+            break
+    for area in win.screen.areas:
+        if area.type == "GRAPH_EDITOR":
+            with context.temp_override(window=win, area=area):
+                try:
+                    bpy.ops.graph.decimate(mode="ERROR", error=0.001)
+                except Exception:
+                    pass
+            break
+
+    return True, f"Baked and cleaned {len(fk_names)} FK bones ({frame_start}-{frame_end})."

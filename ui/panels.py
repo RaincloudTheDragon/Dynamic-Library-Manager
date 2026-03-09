@@ -93,8 +93,9 @@ class DLM_PT_main_panel(Panel):
         row.operator("dlm.migrator_bone_constraints", text="MigBoneConst", icon="CONSTRAINT_BONE")
         row.operator("dlm.migrator_retarget_relations", text="RetargRelatives", icon="ORIENTATION_PARENT")
         row.operator("dlm.migrator_basebody_shapekeys", text="MigBBodyShapeKeys", icon="SHAPEKEY_DATA")
-        row = box.row()
+        row = box.row(align=True)
         row.operator("dlm.migrator_fk_rotations", text="MigFKRot", icon="BONE_DATA")
+        row.operator("dlm.migrator_fk_rotations_bake", text="Bake", icon="KEYFRAME")
 
         # Tweak Tools
         tweak_box = layout.box()

@@ -6,6 +6,7 @@
 import bpy
 import os
 from bpy.types import Operator
+from bpy.props import StringProperty, BoolProperty
 from bpy.props import StringProperty, IntProperty
 
 ADDON_NAME = __package__.rsplit(".", 1)[0] if "." in __package__ else __package__
@@ -406,7 +407,7 @@ class DLM_OT_migrator_basebody_shapekeys(Operator):
 class DLM_OT_migrator_fk_rotations(Operator):
     bl_idname = "dlm.migrator_fk_rotations"
     bl_label = "MigFKRot"
-    bl_description = "Copy FK arm and finger rotations from original to replacement (uses copy_pose_vis_rot)"
+    bl_description = "Copy FK arm and finger rotations from original to replacement (uses constraints)"
     bl_icon = "BONE_DATA"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -418,6 +419,35 @@ class DLM_OT_migrator_fk_rotations(Operator):
         try:
             from ..ops.fk_rotations import copy_fk_rotations
             ok, msg = copy_fk_rotations(context, orig, rep)
+            if ok:
+                self.report({"INFO"}, msg)
+                return {"FINISHED"}
+            else:
+                self.report({"ERROR"}, msg)
+                return {"CANCELLED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_migrator_fk_rotations_bake(Operator):
+    bl_idname = "dlm.migrator_fk_rotations_bake"
+    bl_label = "Bake MigFKRot"
+    bl_description = "Bake FK rotations to keyframes using nla.bake (similar to tweak tools)"
+    bl_icon = "KEYFRAME"
+    bl_options = {"REGISTER", "UNDO"}
+
+    track_name: StringProperty(name="NLA Track", description="Optional NLA track name for frame range", default="")
+    post_clean: BoolProperty(name="Post-clean", description="Clean curves after bake", default=False)
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        if not orig or not rep or orig == rep:
+            self.report({"ERROR"}, "No valid character pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.fk_rotations import bake_fk_rotations
+            ok, msg = bake_fk_rotations(context, rep, track_name=self.track_name or None, post_clean=self.post_clean)
             if ok:
                 self.report({"INFO"}, msg)
                 return {"FINISHED"}
@@ -718,4 +748,5 @@ OPERATOR_CLASSES = [
     DLM_OT_tweak_remove_both,
     DLM_OT_tweak_bake_both,
     DLM_OT_migrator_fk_rotations,
+    DLM_OT_migrator_fk_rotations_bake,
 ]
