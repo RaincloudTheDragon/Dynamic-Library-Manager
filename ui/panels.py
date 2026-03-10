@@ -92,8 +92,13 @@ class DLM_PT_main_panel(Panel):
         row = box.row(align=True)
         row.operator("dlm.migrator_bone_constraints", text="MigBoneConst", icon="CONSTRAINT_BONE")
         row.operator("dlm.migrator_retarget_relations", text="RetargRelatives", icon="ORIENTATION_PARENT")
+
+        # Situational
+        situational_box = layout.box()
+        situational_box.label(text="Situational Fixes", icon="QUESTION")
+        row = situational_box.row(align=True)
         row.operator("dlm.migrator_basebody_shapekeys", text="MigBBodyShapeKeys", icon="SHAPEKEY_DATA")
-        row = box.row(align=True)
+        row = situational_box.row(align=True)
         row.operator("dlm.migrator_fk_rotations", text="MigFKRot", icon="BONE_DATA")
         row.operator("dlm.migrator_fk_rotations_remove", text="Remove", icon="X")
         row.operator("dlm.migrator_fk_rotations_bake", text="Bake", icon="KEYFRAME")
