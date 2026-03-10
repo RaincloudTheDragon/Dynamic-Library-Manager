@@ -485,14 +485,6 @@ class DLM_OT_migrator_fk_rotations_remove(Operator):
             return {"CANCELLED"}
 
 
-MIGRATOR_STEP_OPS = (
-    "dlm.migrator_copy_attributes",
-    "dlm.migrator_migrate_nla",
-    "dlm.migrator_custom_properties",
-    "dlm.migrator_bone_constraints",
-    "dlm.migrator_retarget_relations",
-    "dlm.migrator_basebody_shapekeys",
-)
 
 
 class DLM_OT_migrator_remove_original(Operator):
@@ -522,29 +514,6 @@ class DLM_OT_migrator_remove_original(Operator):
             return {"CANCELLED"}
         return {"FINISHED"}
 
-
-class DLM_OT_run_character_migration(Operator):
-    bl_idname = "dlm.run_character_migration"
-    bl_label = "Run Character Migration"
-    bl_description = "Run all six migration steps (CopyAttr, MigNLA, MigCustProps, MigBoneConst, RetargRelatives, MigBBodyShapeKeys) in order"
-    bl_options = {"REGISTER", "UNDO"}
-
-    def execute(self, context):
-        steps = [
-            bpy.ops.dlm.migrator_copy_attributes,
-            bpy.ops.dlm.migrator_migrate_nla,
-            bpy.ops.dlm.migrator_custom_properties,
-            bpy.ops.dlm.migrator_bone_constraints,
-            bpy.ops.dlm.migrator_retarget_relations,
-            bpy.ops.dlm.migrator_basebody_shapekeys,
-        ]
-        for i, op in enumerate(steps):
-            result = op()
-            if result != {"FINISHED"}:
-                self.report({"ERROR"}, f"Migration failed at step {i + 1}: {MIGRATOR_STEP_OPS[i]}")
-                return {"CANCELLED"}
-        self.report({"INFO"}, "Migration complete.")
-        return {"FINISHED"}
 
 
 class DLM_OT_picker_original_character(Operator):
@@ -784,7 +753,6 @@ OPERATOR_CLASSES = [
     DLM_OT_make_paths_absolute,
     DLM_OT_relocate_single_library,
     DLM_OT_migrator_remove_original,
-    DLM_OT_run_character_migration,
     DLM_OT_picker_original_character,
     DLM_OT_picker_replacement_character,
     DLM_OT_migrator_copy_attributes,
