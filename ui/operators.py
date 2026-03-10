@@ -495,6 +495,34 @@ MIGRATOR_STEP_OPS = (
 )
 
 
+class DLM_OT_migrator_remove_original(Operator):
+    bl_idname = "dlm.migrator_remove_original"
+    bl_label = "Remove Original"
+    bl_description = "Delete the original character armature and its data from the scene"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        if not orig:
+            self.report({"WARNING"}, "No original character selected")
+            return {"CANCELLED"}
+        if orig == rep:
+            self.report({"ERROR"}, "Original and replacement cannot be the same object")
+            return {"CANCELLED"}
+
+        name = orig.name
+        try:
+            # Remove from scene
+            bpy.data.objects.remove(orig, do_unlink=True)
+            # Clear the property
+            context.scene.dynamic_link_manager.original_character = None
+            self.report({"INFO"}, f"Removed original character: {name}")
+        except Exception as e:
+            self.report({"ERROR"}, f"Failed to remove original: {e}")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
 class DLM_OT_run_character_migration(Operator):
     bl_idname = "dlm.run_character_migration"
     bl_label = "Run Character Migration"
@@ -755,6 +783,7 @@ OPERATOR_CLASSES = [
     DLM_OT_make_paths_relative,
     DLM_OT_make_paths_absolute,
     DLM_OT_relocate_single_library,
+    DLM_OT_migrator_remove_original,
     DLM_OT_run_character_migration,
     DLM_OT_picker_original_character,
     DLM_OT_picker_replacement_character,
