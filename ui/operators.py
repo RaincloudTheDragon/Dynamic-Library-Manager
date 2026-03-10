@@ -9,6 +9,8 @@ from bpy.types import Operator
 from bpy.props import StringProperty, BoolProperty
 from bpy.props import StringProperty, IntProperty
 
+from ..utils import collection_containing_armature
+
 ADDON_NAME = __package__.rsplit(".", 1)[0] if "." in __package__ else __package__
 
 
@@ -504,11 +506,22 @@ class DLM_OT_migrator_remove_original(Operator):
 
         name = orig.name
         try:
-            # Remove from scene
-            bpy.data.objects.remove(orig, do_unlink=True)
-            # Clear the property
-            context.scene.dynamic_link_manager.original_character = None
-            self.report({"INFO"}, f"Removed original character: {name}")
+            # Try to find and delete the collection containing the original character
+            coll = collection_containing_armature(orig)
+            if coll:
+                coll_name = coll.name  # Store name BEFORE removal (RNA invalidates after remove)
+                context.scene.dynamic_link_manager.original_character = None
+                try:
+                    bpy.data.collections.remove(coll)
+                    self.report({"INFO"}, f"Removed collection: {coll_name}")
+                except Exception as remove_err:
+                    # Collection may have already been removed by another process
+                    self.report({"WARNING"}, f"Collection {coll_name} removal issue: {remove_err}")
+            else:
+                # Fallback: just delete the armature object
+                bpy.data.objects.remove(orig, do_unlink=True)
+                context.scene.dynamic_link_manager.original_character = None
+                self.report({"INFO"}, f"Removed original character: {name}")
         except Exception as e:
             self.report({"ERROR"}, f"Failed to remove original: {e}")
             return {"CANCELLED"}
