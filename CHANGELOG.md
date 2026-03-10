@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0] - 2026-03-10
+
+### Added
+- New "Remove Original" operator with collection deletion and action management (purge/cleanup).
+- FK rotation migration improvements: baking support, single-frame copy, armature parent replication in RetargRelatives.
+
+### Changed
+- UI improvements: Tweak Tools section is now collapsible; reorganized into Situational Fixes section.
+- Removed "Run Migration" button (functionality merged into Remove Original workflow).
+
+### Fixed
+- MigFKRot: fixed error printing and improved bone matching reliability.
+
 ## [0.1.2] - 2026-02-19
 
 ### Added
