@@ -505,6 +505,32 @@ class DLM_OT_migrator_remove_original(Operator):
             return {"CANCELLED"}
 
         name = orig.name
+
+        # Collect actions from original character before removal
+        actions_to_remove = set()
+        if orig.animation_data:
+            # Active action
+            if orig.animation_data.action:
+                actions_to_remove.add(orig.animation_data.action)
+            # NLA strips
+            for track in orig.animation_data.nla_tracks:
+                for strip in track.strips:
+                    if strip.action:
+                        actions_to_remove.add(strip.action)
+
+        # Remove collected actions from bpy.data.actions
+        removed_actions = []
+        for action in actions_to_remove:
+            action_name = action.name
+            try:
+                bpy.data.actions.remove(action)
+                removed_actions.append(action_name)
+            except Exception as e:
+                self.report({"WARNING"}, f"Could not remove action {action_name}: {e}")
+
+        if removed_actions:
+            self.report({"INFO"}, f"Removed {len(removed_actions)} action(s) from original")
+
         try:
             # Try to find and delete the collection containing the original character
             coll = collection_containing_armature(orig)
@@ -525,9 +551,28 @@ class DLM_OT_migrator_remove_original(Operator):
         except Exception as e:
             self.report({"ERROR"}, f"Failed to remove original: {e}")
             return {"CANCELLED"}
+
+        # Rename replacement actions with ".rep" suffix
+        if rep and rep.animation_data:
+            renamed_actions = []
+            # Active action
+            if rep.animation_data.action and ".rep" in rep.animation_data.action.name:
+                old_name = rep.animation_data.action.name
+                new_name = old_name.replace(".rep", "")
+                rep.animation_data.action.name = new_name
+                renamed_actions.append(f"{old_name} -> {new_name}")
+            # NLA strips
+            for track in rep.animation_data.nla_tracks:
+                for strip in track.strips:
+                    if strip.action and ".rep" in strip.action.name:
+                        old_name = strip.action.name
+                        new_name = old_name.replace(".rep", "")
+                        strip.action.name = new_name
+                        renamed_actions.append(f"{old_name} -> {new_name}")
+            if renamed_actions:
+                self.report({"INFO"}, f"Renamed {len(renamed_actions)} replacement action(s)")
+
         return {"FINISHED"}
-
-
 
 class DLM_OT_picker_original_character(Operator):
     bl_idname = "dlm.picker_original_character"
