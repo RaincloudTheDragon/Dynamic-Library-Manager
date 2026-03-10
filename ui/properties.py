@@ -60,7 +60,12 @@ class DynamicLinkManagerProperties(PropertyGroup):
         poll=lambda self, obj: obj and obj.type == "ARMATURE",
     )
 
-    # Tweak tools (bake frame range and post-clean)
+    # Tweak tools (collapsible section)
+    tweak_tools_section_expanded: BoolProperty(
+        name="Tweak Tools Expanded",
+        description="Show or hide the Tweak Tools section",
+        default=False,
+    )
     tweak_nla_track_name: StringProperty(
         name="NLA Track (bake range)",
         description="If set, bake uses this NLA track on the replacement armature for frame range; else scene range",
