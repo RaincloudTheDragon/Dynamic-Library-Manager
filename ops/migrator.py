@@ -482,13 +482,16 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
     for ob in candidates:
         if ob.parent == orig:
             ob.parent = rep
-        for c in getattr(ob, "constraints", []):
-            if getattr(c, "target", None) == orig:
-                c.target = rep
         if ob.type == "MESH" and ob.modifiers:
             for m in ob.modifiers:
                 if getattr(m, "object", None) == orig:
                     m.object = rep
+
+    # Retarget constraints on ALL objects (including orig hierarchy like eyes)
+    for ob in bpy.data.objects:
+        for c in getattr(ob, "constraints", []):
+            if getattr(c, "target", None) == orig:
+                c.target = rep
 
     # Camera DOF: retarget focus_object from orig to rep
     for ob in bpy.data.objects:
