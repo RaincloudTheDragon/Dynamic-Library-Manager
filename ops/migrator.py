@@ -490,6 +490,16 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
                 if getattr(m, "object", None) == orig:
                     m.object = rep
 
+    # Camera DOF: retarget focus_object from orig to rep
+    for ob in bpy.data.objects:
+        if ob.type != 'CAMERA':
+            continue
+        camera = ob.data
+        if not camera.dof:
+            continue
+        if camera.dof.focus_object == orig:
+            camera.dof.focus_object = rep
+
 
 def _base_body_name_match(ob):
     """True if object looks like the base body mesh (MESH, name has body+base)."""
