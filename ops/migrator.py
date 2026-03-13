@@ -493,6 +493,15 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
             if getattr(c, "target", None) == orig:
                 c.target = rep
 
+    # Retarget bone constraints on ALL armatures (other characters, etc.)
+    for ob in bpy.data.objects:
+        if ob.type != "ARMATURE" or not ob.pose:
+            continue
+        for pbone in ob.pose.bones:
+            for c in pbone.constraints:
+                if getattr(c, "target", None) == orig:
+                    c.target = rep
+
     # Camera DOF: retarget focus_object from orig to rep
     for ob in bpy.data.objects:
         if ob.type != 'CAMERA':
