@@ -3,7 +3,7 @@
 # the Free Software Foundation; either version 3 of the License, or
 # (at your option) any later version.
 
-"""Tweak tools: add/remove/bake COPY_TRANSFORMS on Rigify arm/leg tweak bones."""
+"""Tweak tools: add/remove/bake COPY_TRANSFORMS on Rigify tweak bones (arm, leg, or all)."""
 
 import bpy
 
@@ -22,7 +22,7 @@ TWEAK_CONSTRAINT_NAME = "Copy from Original"
 
 
 def get_tweak_bones(armature, limb):
-    """Return list of tweak bone names that exist on armature. limb in 'arm', 'leg', 'both'."""
+    """Return list of tweak bone names that exist on armature. limb in 'arm', 'leg', 'body', 'both'."""
     if not armature or armature.type != "ARMATURE" or not armature.pose:
         return []
     bones = armature.pose.bones
@@ -30,8 +30,20 @@ def get_tweak_bones(armature, limb):
         names = ARM_TWEAK_BONES
     elif limb == "leg":
         names = LEG_TWEAK_BONES
+    elif limb == "body":
+        # Body/torso tweaks: tweak_spine, spine_fk, etc. (no arm/leg)
+        arm_leg_names = set(ARM_TWEAK_BONES + LEG_TWEAK_BONES)
+        names = [
+            b.name for b in bones
+            if ("tweak" in b.name.lower() or "spine_fk" in b.name.lower())
+            and b.name not in arm_leg_names
+        ]
     elif limb == "both":
-        names = ARM_TWEAK_BONES + LEG_TWEAK_BONES
+        # ALL tweak bones: any bone with "tweak" or "spine_fk" in the name
+        names = [
+            b.name for b in bones
+            if "tweak" in b.name.lower() or "spine_fk" in b.name.lower()
+        ]
     else:
         return []
     return [n for n in names if n in bones]
@@ -101,7 +113,7 @@ def bake_tweak_constraints(context, orig, rep, limb, track_name, post_clean):
     # Select only tweak bones on rep
     bpy.ops.pose.select_all(action="DESELECT")
     for name in names:
-        rep.pose.bones[name].bone.select = True
+        rep.data.bones[name].select = True
 
     # Bake
     try:

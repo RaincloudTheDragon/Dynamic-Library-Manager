@@ -735,10 +735,72 @@ class DLM_OT_tweak_bake_leg(Operator):
         return {"CANCELLED"}
 
 
+class DLM_OT_tweak_add_body(Operator):
+    bl_idname = "dlm.tweak_add_body"
+    bl_label = "Add Body Tweaks"
+    bl_description = "Add tweak bone constraints to body/torso bones (spine, no arm/leg)"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _tweak_poll(context)
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        from ..ops import tweak_tools
+        tweak_tools.add_tweak_constraints(orig, rep, "body")
+        self.report({"INFO"}, "Body tweak constraints added.")
+        return {"FINISHED"}
+
+
+class DLM_OT_tweak_remove_body(Operator):
+    bl_idname = "dlm.tweak_remove_body"
+    bl_label = "Remove Body Tweaks"
+    bl_description = "Remove body/torso tweak constraints from the replacement character"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _tweak_poll(context)
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        from ..ops import tweak_tools
+        n = tweak_tools.remove_tweak_constraints(orig, rep, "body")
+        self.report({"INFO"}, f"Removed {n} body tweak constraints.")
+        return {"FINISHED"}
+
+
+class DLM_OT_tweak_bake_body(Operator):
+    bl_idname = "dlm.tweak_bake_body"
+    bl_label = "Bake Body Tweaks"
+    bl_description = "Bake body/torso tweak constraints to keyframes and optionally remove constraints"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return _tweak_poll(context)
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        props = context.scene.dynamic_link_manager
+        from ..ops import tweak_tools
+        ok, msg = tweak_tools.bake_tweak_constraints(
+            context, orig, rep, "body",
+            getattr(props, "tweak_nla_track_name", "") or "",
+            getattr(props, "tweak_bake_post_clean", False),
+        )
+        if ok:
+            self.report({"INFO"}, msg)
+            return {"FINISHED"}
+        self.report({"ERROR"}, msg)
+        return {"CANCELLED"}
+
+
 class DLM_OT_tweak_add_both(Operator):
     bl_idname = "dlm.tweak_add_both"
-    bl_label = "Add Arm & Leg Tweaks"
-    bl_description = "Add tweak bone constraints to both arm and leg bones"
+    bl_label = "Add All Tweaks"
+    bl_description = "Add tweak bone constraints to all tweak bones (arm, leg, body)"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -749,14 +811,14 @@ class DLM_OT_tweak_add_both(Operator):
         orig, rep = _get_migrator_pair(context)
         from ..ops import tweak_tools
         tweak_tools.add_tweak_constraints(orig, rep, "both")
-        self.report({"INFO"}, "Arm & leg tweak constraints added.")
+        self.report({"INFO"}, "All tweak constraints added.")
         return {"FINISHED"}
 
 
 class DLM_OT_tweak_remove_both(Operator):
     bl_idname = "dlm.tweak_remove_both"
-    bl_label = "Remove Arm & Leg Tweaks"
-    bl_description = "Remove all arm and leg tweak constraints from the replacement character"
+    bl_label = "Remove All Tweaks"
+    bl_description = "Remove all tweak constraints from the replacement character"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -773,8 +835,8 @@ class DLM_OT_tweak_remove_both(Operator):
 
 class DLM_OT_tweak_bake_both(Operator):
     bl_idname = "dlm.tweak_bake_both"
-    bl_label = "Bake Arm & Leg Tweaks"
-    bl_description = "Bake all arm and leg tweak constraints to keyframes and optionally remove constraints"
+    bl_label = "Bake All Tweaks"
+    bl_description = "Bake all tweak constraints (arm, leg, body) to keyframes and optionally remove constraints"
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod
@@ -825,6 +887,9 @@ OPERATOR_CLASSES = [
     DLM_OT_tweak_add_leg,
     DLM_OT_tweak_remove_leg,
     DLM_OT_tweak_bake_leg,
+    DLM_OT_tweak_add_body,
+    DLM_OT_tweak_remove_body,
+    DLM_OT_tweak_bake_body,
     DLM_OT_tweak_add_both,
     DLM_OT_tweak_remove_both,
     DLM_OT_tweak_bake_both,
