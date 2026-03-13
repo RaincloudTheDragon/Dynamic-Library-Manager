@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0] - 2026-03-13
+
+### Added
+- Camera DOF focus_object retargeting in RetargRelations.
+- Bone constraint retargeting for ALL armatures (other characters, props).
+- New "Body" tweak mode: spine/torso tweaks without arm/leg.
+- "Add All" tweaks now includes body, spine, and MCH tweaks.
+
+### Changed
+- Constraint retargeting now works on all objects (including orig hierarchy eyes).
+- Tweak UI: renamed "Both" to "All", added "Body" row.
+
+### Fixed
+- Blender 5.0 bone selection API compatibility (pose_bone.select).
+
 ## [0.2.0] - 2026-03-10
 
 ### Added
