@@ -113,7 +113,7 @@ def bake_tweak_constraints(context, orig, rep, limb, track_name, post_clean):
     # Select only tweak bones on rep
     bpy.ops.pose.select_all(action="DESELECT")
     for name in names:
-        rep.data.bones[name].select = True
+        rep.pose.bones[name].select = True
 
     # Bake
     try:
