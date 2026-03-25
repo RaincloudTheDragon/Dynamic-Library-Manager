@@ -543,7 +543,7 @@ class DLM_OT_migrator_remove_original(Operator):
         props = context.scene.dynamic_link_manager
         rig_family = getattr(props, "migrator_rig_family", "RIGIFY")
         try:
-            coll = resolve_collection_for_remove_original(orig, rig_family, context.scene)
+            coll = resolve_collection_for_remove_original(orig, rig_family, context.scene, rep)
             if coll:
                 coll_name = coll.name  # Store name BEFORE removal (RNA invalidates after remove)
                 context.scene.dynamic_link_manager.original_character = None

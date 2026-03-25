@@ -13,10 +13,11 @@ def _parent_collection(scene, coll):
     if coll is None:
         return None
     master = scene.collection
-    if coll in master.children:
+    # Blender 5+: children.__contains__ expects collection name strings, not Collection objects.
+    if coll.name in master.children:
         return master
     for p in bpy.data.collections:
-        if coll in p.children:
+        if coll.name in p.children:
             return p
     return None
 
@@ -39,6 +40,19 @@ def _walk_up_chain(scene, coll):
         chain.append(cur)
         cur = _parent_collection(scene, cur)
     return chain
+
+
+def _collection_contains_object_recursive(coll, ob):
+    """True if ob is in coll.objects or in any descendant collection (recursive)."""
+    if coll is None or ob is None:
+        return False
+    for o in coll.objects:
+        if o == ob:
+            return True
+    for child in coll.children:
+        if _collection_contains_object_recursive(child, ob):
+            return True
+    return False
 
 
 def _deepest_users_collection(scene, armature):
@@ -95,12 +109,15 @@ def _pick_remove_target_from_chain(orig, chain, rig_family):
     return chain[-1]
 
 
-def resolve_collection_for_remove_original(orig, rig_family, scene):
+def resolve_collection_for_remove_original(orig, rig_family, scene, rep=None):
     """
     Return a collection to remove for Remove Original, or None to fall back to object-only removal.
 
     Walks up from the deepest users_collection so nested linked rigs remove the outer instance,
     not an inner linked child collection.
+
+    If rep is the replacement armature, never remove a collection whose subtree contains rep
+    (avoids deleting both characters when they share a parent collection).
 
     rig_family: 'RIGIFY' | 'ARP' (ARP skips Rigify name heuristics in _pick_remove_target_from_chain).
     """
@@ -114,5 +131,10 @@ def resolve_collection_for_remove_original(orig, rig_family, scene):
     chain = _walk_up_chain(scene, inner)
     if not chain:
         return None
+
+    if rep is not None and rep.name in bpy.data.objects:
+        chain = [c for c in chain if not _collection_contains_object_recursive(c, rep)]
+        if not chain:
+            return None
 
     return _pick_remove_target_from_chain(orig, chain, rig_family)
