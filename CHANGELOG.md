@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0] - 2026-03-25
+
+### Added
+- CharMig: ARP (Auto-Rig Pro) support alongside Rigify (rig-family selector and related migrator behavior).
+- MigBBody shapekeys: include manually specified meshes in migration, not only auto-detected base body.
+
+### Changed
+- MigNLA: activate the replacement character before turning on Animation Layers, so AnimLayers apply without manually selecting rep first.
+
+### Fixed
+- Remove Original: when resolving which collection to delete, never remove a collection whose subtree still contains the replacement armature (avoids deleting both orig and rep when they share hierarchy); Blender 5 collection parent checks use collection names.
+
 ## [0.3.0] - 2026-03-13
 
 ### Added
