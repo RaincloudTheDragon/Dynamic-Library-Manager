@@ -5,9 +5,69 @@
 
 """Character migrator: migrate animation, constraints, relations from original to replacement armature."""
 
+from contextlib import contextmanager
+
 import bpy
 
 from ..utils import descendants, collection_containing_armature
+
+
+def _first_view3d_area(context):
+    win = getattr(context, "window", None)
+    if not win or not getattr(win, "screen", None):
+        return None, None
+    for area in win.screen.areas:
+        if area.type == "VIEW_3D":
+            return win, area
+    return None, None
+
+
+@contextmanager
+def _rep_active_for_animlayers(context, rep):
+    """Make rep the only selected active object in Object mode so Animation Layers (als.turn_on) applies to rep.
+
+    Does not restore the previous selection: Anim Layers and the UI expect rep to stay active after MigNLA.
+    """
+    if context is None or rep is None:
+        yield
+        return
+    vl = context.view_layer
+    win, area = _first_view3d_area(context)
+    # Ops need a VIEW_3D context; selection/active still use view_layer.
+    if win and area:
+        with context.temp_override(window=win, area=area):
+            if context.mode != "OBJECT":
+                try:
+                    bpy.ops.object.mode_set(mode="OBJECT")
+                except Exception:
+                    pass
+            try:
+                bpy.ops.object.select_all(action="DESELECT")
+            except Exception:
+                pass
+    else:
+        if context.mode != "OBJECT":
+            try:
+                bpy.ops.object.mode_set(mode="OBJECT")
+            except Exception:
+                pass
+        try:
+            bpy.ops.object.select_all(action="DESELECT")
+        except Exception:
+            pass
+    for ob in vl.objects:
+        try:
+            ob.select_set(False)
+        except Exception:
+            pass
+    try:
+        rep.select_set(True)
+    except Exception:
+        pass
+    vl.objects.active = rep
+    if bpy.context.view_layer == vl:
+        bpy.context.view_layer.objects.active = rep
+    yield
 
 
 def get_pair_manual(context):
@@ -202,9 +262,10 @@ def _duplicate_action(src_action, suffix=".rep"):
     return new_action
 
 
-def run_mig_nla(orig, rep, report=None):
+def run_mig_nla(orig, rep, report=None, context=None):
     """Migrate NLA: copy tracks and strips to replacement; or mirror action slot when no NLA (MigNLA).
-    Actions are duplicated so repchar has independent copies."""
+    Actions are duplicated so repchar has independent copies.
+    Pass context so Animation Layers mirroring runs with rep as active object."""
     if not orig.animation_data:
         return
     ad = orig.animation_data
@@ -249,7 +310,8 @@ def run_mig_nla(orig, rep, report=None):
                 setattr(rad, prop, getattr(ad, prop))
                 print(f"[DLM MigNLA] set rep {prop}={getattr(ad, prop)!r}")
         _slot_debug("Rep (after)", rad)
-        _mirror_als_turn_on(orig, rep)
+        with _rep_active_for_animlayers(context, rep):
+            _mirror_als_turn_on(orig, rep)
         if report:
             report({"INFO"}, "No NLA detected, active action (duplicated) and slot copied to Replacement Armature.")
         return
@@ -296,7 +358,8 @@ def run_mig_nla(orig, rep, report=None):
             new_strip.use_animated_time_cyclic = strip.use_animated_time_cyclic
             new_strip.use_sync_length = strip.use_sync_length
         prev_track = new_track
-    _mirror_als_turn_on(orig, rep)
+    with _rep_active_for_animlayers(context, rep):
+        _mirror_als_turn_on(orig, rep)
     if report:
         _debug_als_lookup(orig)
         has_als = _has_als_anywhere(orig)
@@ -703,7 +766,7 @@ def run_full_migration(context):
 
     try:
         run_copy_attr(orig, rep)
-        run_mig_nla(orig, rep)
+        run_mig_nla(orig, rep, context=context)
         run_mig_cust_props(orig, rep)
         run_mig_bone_const(orig, rep, orig_to_rep)
         run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep)
