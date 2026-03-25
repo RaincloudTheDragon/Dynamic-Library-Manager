@@ -399,7 +399,16 @@ class DLM_OT_migrator_basebody_shapekeys(Operator):
             from ..utils import descendants
             rep_descendants = descendants(rep)
             run_mig_bbody_shapekeys(orig, rep, rep_descendants, context)
-            self.report({"INFO"}, "Migrate BaseBody shapekeys done.")
+            props = context.scene.dynamic_link_manager
+            if props.migbbody_manual_override and (
+                not props.migbbody_orig_body or not props.migbbody_rep_body
+            ):
+                self.report(
+                    {"WARNING"},
+                    "MigBBody: no CC-style base mesh matched. Pick Original/Replacement body meshes, then run again.",
+                )
+            else:
+                self.report({"INFO"}, "Migrate BaseBody shapekeys done.")
             return {"FINISHED"}
         except Exception as e:
             self.report({"ERROR"}, str(e))

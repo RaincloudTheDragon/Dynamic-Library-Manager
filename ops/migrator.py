@@ -629,9 +629,126 @@ def _find_base_body(armature, descendants_iter, rep_base_name=None):
     return candidates[0]
 
 
+def _process_mig_bbody_mesh(orig_base, ob, context):
+    """Library overrides on rep mesh ob; copy shape key values and action from orig_base mesh."""
+    # Debug: base body mesh state before override handling.
+    _lib = getattr(ob.data, "library", None)
+    _ol = getattr(ob.data, "override_library", None)
+    _sys = getattr(_ol, "is_system_override", None) if _ol else None
+    print(f"[DLM step6] {ob.name} data: linked={_lib is not None}, override={_ol is not None}, is_system_override={_sys}")
+    # Library override: use hierarchy create (fully editable) when context available, else single-id override.
+    if getattr(ob, "library", None):
+        if context:
+            try:
+                ob = ob.override_hierarchy_create(
+                    context.scene, context.view_layer, do_fully_editable=True
+                )
+            except Exception:
+                try:
+                    ob.override_create()
+                except Exception:
+                    pass
+        else:
+            try:
+                ob.override_create()
+            except Exception:
+                pass
+    if getattr(ob.data, "library", None):
+        try:
+            ob.data.override_create(remap_local_usages=True)
+            # Make override user-editable (same as shift-click in data tab).
+            ol = getattr(ob.data, "override_library", None)
+            if ol is not None and getattr(ol, "is_system_override", None) is not None:
+                try:
+                    ol.is_system_override = False
+                except Exception as e:
+                    print(f"[DLM step6] {ob.name} set is_system_override=False: {e}")
+        except Exception as e:
+            print(f"[DLM step6] {ob.name} ob.data.override_create: {e}")
+    elif getattr(ob.data, "override_library", None):
+        ol = ob.data.override_library
+        if getattr(ol, "is_system_override", False):
+            try:
+                ol.is_system_override = False
+            except Exception as e:
+                print(f"[DLM step6] {ob.name} set is_system_override=False: {e}")
+    # Debug: state after override handling.
+    _ol2 = getattr(ob.data, "override_library", None)
+    _sys2 = getattr(_ol2, "is_system_override", None) if _ol2 else None
+    print(f"[DLM step6] {ob.name} after: override={_ol2 is not None}, is_system_override={_sys2} (False=editable)")
+    if ob.data.shape_keys:
+        # Ensure we can write shape key values: override the Key block if it is linked.
+        sk = ob.data.shape_keys
+        if getattr(sk, "library", None):
+            try:
+                sk.override_create(remap_local_usages=True)
+            except Exception as e:
+                print(f"[DLM step6] {ob.name} shape_keys.override_create: {e}")
+        # Copy shape key values from original base body to replacement (by matching key name).
+        if orig_base and orig_base.data.shape_keys:
+            rep_blocks = ob.data.shape_keys.key_blocks
+            orig_blocks = orig_base.data.shape_keys.key_blocks
+            n_copied = 0
+            for orig_key in orig_blocks:
+                rep_key = rep_blocks.get(orig_key.name)
+                if rep_key is not None:
+                    rep_key.value = orig_key.value
+                    n_copied += 1
+            print(f"[DLM step6] {ob.name} shapekey values: copied {n_copied}/{len(orig_blocks)} from {orig_base.name}")
+        else:
+            if not orig_base:
+                print(f"[DLM step6] {ob.name} no orig base body found")
+            elif not orig_base.data.shape_keys:
+                print(f"[DLM step6] {ob.name} orig base body has no shape_keys")
+        if not ob.data.shape_keys.animation_data:
+            ob.data.shape_keys.animation_data_create()
+        sk_ad = ob.data.shape_keys.animation_data
+        # Prefer action (and slot) from original base body; fallback to name lookup.
+        orig_sk_ad = None
+        if orig_base and orig_base.data.shape_keys:
+            orig_sk_ad = orig_base.data.shape_keys.animation_data
+        action = None
+        if orig_sk_ad and getattr(orig_sk_ad, "action", None):
+            action = orig_sk_ad.action
+        if action is None:
+            body_name = ob.name
+            action = (
+                bpy.data.actions.get(body_name + "Action")
+                or bpy.data.actions.get(ob.data.name + "Action")
+                or bpy.data.actions.get(body_name + "Action.001")
+            )
+        if action:
+            # Duplicate action so repchar has independent copy
+            dup_action = _duplicate_action(action, suffix=".rep")
+            # Copy slot-related props before action so slot is applied (Blender 4.4+).
+            if orig_sk_ad and hasattr(sk_ad, "last_slot_identifier") and hasattr(orig_sk_ad, "last_slot_identifier") and orig_sk_ad.last_slot_identifier:
+                sk_ad.last_slot_identifier = orig_sk_ad.last_slot_identifier
+            sk_ad.action = dup_action
+            if orig_sk_ad and getattr(orig_sk_ad, "action_slot", None) and getattr(sk_ad, "action_slot", None):
+                try:
+                    sk_ad.action_slot = orig_sk_ad.action_slot
+                except Exception:
+                    pass
+            for prop in ("action_blend_type", "action_extrapolation", "action_influence"):
+                if orig_sk_ad and hasattr(orig_sk_ad, prop) and hasattr(sk_ad, prop):
+                    try:
+                        setattr(sk_ad, prop, getattr(orig_sk_ad, prop))
+                    except Exception:
+                        pass
+
+
 def run_mig_bbody_shapekeys(orig, rep, rep_descendants, context=None):
     """Replacement base body: library override (fully editable when context given), copy shapekey values, then shape-key action."""
+    props = getattr(context.scene, "dynamic_link_manager", None) if context else None
+    if props and getattr(props, "migbbody_manual_override", False):
+        mo = getattr(props, "migbbody_orig_body", None)
+        mr = getattr(props, "migbbody_rep_body", None)
+        if mo and mr and mo.type == "MESH" and mr.type == "MESH":
+            _process_mig_bbody_mesh(mo, mr, context)
+            return
+
     orig_descendants = list(descendants(orig))
+    any_auto = False
     for ob in list(rep_descendants):
         if not _base_body_name_match(ob):
             continue
@@ -641,111 +758,11 @@ def run_mig_bbody_shapekeys(orig, rep, rep_descendants, context=None):
                     break
             else:
                 continue
+        any_auto = True
         orig_base = _find_base_body(orig, orig_descendants, rep_base_name=ob.name)
-        # Debug: base body mesh state before override handling.
-        _lib = getattr(ob.data, "library", None)
-        _ol = getattr(ob.data, "override_library", None)
-        _sys = getattr(_ol, "is_system_override", None) if _ol else None
-        print(f"[DLM step6] {ob.name} data: linked={_lib is not None}, override={_ol is not None}, is_system_override={_sys}")
-        # Library override: use hierarchy create (fully editable) when context available, else single-id override.
-        if getattr(ob, "library", None):
-            if context:
-                try:
-                    ob = ob.override_hierarchy_create(
-                        context.scene, context.view_layer, do_fully_editable=True
-                    )
-                except Exception:
-                    try:
-                        ob.override_create()
-                    except Exception:
-                        pass
-            else:
-                try:
-                    ob.override_create()
-                except Exception:
-                    pass
-        if getattr(ob.data, "library", None):
-            try:
-                ob.data.override_create(remap_local_usages=True)
-                # Make override user-editable (same as shift-click in data tab).
-                ol = getattr(ob.data, "override_library", None)
-                if ol is not None and getattr(ol, "is_system_override", None) is not None:
-                    try:
-                        ol.is_system_override = False
-                    except Exception as e:
-                        print(f"[DLM step6] {ob.name} set is_system_override=False: {e}")
-            except Exception as e:
-                print(f"[DLM step6] {ob.name} ob.data.override_create: {e}")
-        elif getattr(ob.data, "override_library", None):
-            ol = ob.data.override_library
-            if getattr(ol, "is_system_override", False):
-                try:
-                    ol.is_system_override = False
-                except Exception as e:
-                    print(f"[DLM step6] {ob.name} set is_system_override=False: {e}")
-        # Debug: state after override handling.
-        _ol2 = getattr(ob.data, "override_library", None)
-        _sys2 = getattr(_ol2, "is_system_override", None) if _ol2 else None
-        print(f"[DLM step6] {ob.name} after: override={_ol2 is not None}, is_system_override={_sys2} (False=editable)")
-        if ob.data.shape_keys:
-            # Ensure we can write shape key values: override the Key block if it is linked.
-            sk = ob.data.shape_keys
-            if getattr(sk, "library", None):
-                try:
-                    sk.override_create(remap_local_usages=True)
-                except Exception as e:
-                    print(f"[DLM step6] {ob.name} shape_keys.override_create: {e}")
-            # Copy shape key values from original base body to replacement (by matching key name).
-            if orig_base and orig_base.data.shape_keys:
-                rep_blocks = ob.data.shape_keys.key_blocks
-                orig_blocks = orig_base.data.shape_keys.key_blocks
-                n_copied = 0
-                for orig_key in orig_blocks:
-                    rep_key = rep_blocks.get(orig_key.name)
-                    if rep_key is not None:
-                        rep_key.value = orig_key.value
-                        n_copied += 1
-                print(f"[DLM step6] {ob.name} shapekey values: copied {n_copied}/{len(orig_blocks)} from {orig_base.name}")
-            else:
-                if not orig_base:
-                    print(f"[DLM step6] {ob.name} no orig base body found for armature {orig.name}")
-                elif not orig_base.data.shape_keys:
-                    print(f"[DLM step6] {ob.name} orig base body has no shape_keys")
-            if not ob.data.shape_keys.animation_data:
-                ob.data.shape_keys.animation_data_create()
-            sk_ad = ob.data.shape_keys.animation_data
-            # Prefer action (and slot) from original base body; fallback to name lookup.
-            orig_sk_ad = None
-            if orig_base and orig_base.data.shape_keys:
-                orig_sk_ad = orig_base.data.shape_keys.animation_data
-            action = None
-            if orig_sk_ad and getattr(orig_sk_ad, "action", None):
-                action = orig_sk_ad.action
-            if action is None:
-                body_name = ob.name
-                action = (
-                    bpy.data.actions.get(body_name + "Action")
-                    or bpy.data.actions.get(ob.data.name + "Action")
-                    or bpy.data.actions.get(body_name + "Action.001")
-                )
-            if action:
-                # Duplicate action so repchar has independent copy
-                dup_action = _duplicate_action(action, suffix=".rep")
-                # Copy slot-related props before action so slot is applied (Blender 4.4+).
-                if orig_sk_ad and hasattr(sk_ad, "last_slot_identifier") and hasattr(orig_sk_ad, "last_slot_identifier") and orig_sk_ad.last_slot_identifier:
-                    sk_ad.last_slot_identifier = orig_sk_ad.last_slot_identifier
-                sk_ad.action = dup_action
-                if orig_sk_ad and getattr(orig_sk_ad, "action_slot", None) and getattr(sk_ad, "action_slot", None):
-                    try:
-                        sk_ad.action_slot = orig_sk_ad.action_slot
-                    except Exception:
-                        pass
-                for prop in ("action_blend_type", "action_extrapolation", "action_influence"):
-                    if orig_sk_ad and hasattr(orig_sk_ad, prop) and hasattr(sk_ad, prop):
-                        try:
-                            setattr(sk_ad, prop, getattr(orig_sk_ad, prop))
-                        except Exception:
-                            pass
+        _process_mig_bbody_mesh(orig_base, ob, context)
+    if not any_auto and props is not None:
+        props.migbbody_manual_override = True
 
 
 def run_full_migration(context):

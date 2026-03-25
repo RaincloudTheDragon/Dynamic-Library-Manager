@@ -98,6 +98,14 @@ class DLM_PT_main_panel(Panel):
         # Situational
         situational_box = layout.box()
         situational_box.label(text="Situational Fixes", icon="QUESTION")
+        row = situational_box.row()
+        row.prop(props, "migbbody_manual_override", text="Manual body meshes")
+        row = situational_box.row()
+        row.enabled = props.migbbody_manual_override
+        row.prop(props, "migbbody_orig_body", text="Original body")
+        row = situational_box.row()
+        row.enabled = props.migbbody_manual_override
+        row.prop(props, "migbbody_rep_body", text="Replacement body")
         row = situational_box.row(align=True)
         row.operator("dlm.migrator_basebody_shapekeys", text="MigBBodyShapeKeys", icon="SHAPEKEY_DATA")
         row = situational_box.row(align=True)

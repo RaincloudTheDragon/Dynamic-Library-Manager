@@ -78,6 +78,28 @@ class DynamicLinkManagerProperties(PropertyGroup):
         poll=lambda self, obj: obj and obj.type == "ARMATURE",
     )
 
+    # MigBBody: manual mesh pair when CC/iClone-style auto-detection fails
+    migbbody_manual_override: BoolProperty(
+        name="Manual body meshes",
+        description=(
+            "Enable to pick original and replacement body meshes manually. "
+            "Auto-enables if MigBBody cannot find a base mesh (non-CC rigs)."
+        ),
+        default=False,
+    )
+    migbbody_orig_body: PointerProperty(
+        name="Original body",
+        description="Original character body mesh (shape key source)",
+        type=bpy.types.Object,
+        poll=lambda self, obj: obj and obj.type == "MESH",
+    )
+    migbbody_rep_body: PointerProperty(
+        name="Replacement body",
+        description="Replacement character body mesh (shape key target)",
+        type=bpy.types.Object,
+        poll=lambda self, obj: obj and obj.type == "MESH",
+    )
+
     # Tweak tools (collapsible section)
     tweak_tools_section_expanded: BoolProperty(
         name="Tweak Tools Expanded",
