@@ -5,7 +5,14 @@
 
 import bpy
 from bpy.types import PropertyGroup
-from bpy.props import IntProperty, StringProperty, BoolProperty, CollectionProperty, PointerProperty
+from bpy.props import (
+    IntProperty,
+    StringProperty,
+    BoolProperty,
+    CollectionProperty,
+    PointerProperty,
+    EnumProperty,
+)
 
 
 class SearchPathItem(PropertyGroup):
@@ -40,6 +47,17 @@ class DynamicLinkManagerProperties(PropertyGroup):
         default=False,
     )
     selected_asset_path: StringProperty(name="Selected Asset Path", default="")
+
+    # Character migrator: rig family (future ARP-specific migration; Remove Original uses it for collection resolution)
+    migrator_rig_family: EnumProperty(
+        name="Rig family",
+        description="Rigify vs Auto-Rig Pro: affects Remove Original collection detection and future bone heuristics",
+        items=(
+            ("RIGIFY", "Rigify", "Rigify rig naming and defaults"),
+            ("ARP", "ARP", "Auto-Rig Pro rig naming and collection behavior"),
+        ),
+        default="RIGIFY",
+    )
 
     # Character migrator (manual mode)
     migrator_mode: BoolProperty(

@@ -76,6 +76,8 @@ class DLM_PT_main_panel(Panel):
         box = layout.box()
         box.label(text="Character Migrator")
         row = box.row()
+        row.prop(props, "migrator_rig_family", expand=True)
+        row = box.row()
         row.prop(props, "migrator_mode", text="Automatic pair discovery")
         row = box.row()
         row.prop(props, "original_character", text="Original")

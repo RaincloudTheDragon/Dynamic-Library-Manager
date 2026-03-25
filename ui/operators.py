@@ -9,7 +9,7 @@ from bpy.types import Operator
 from bpy.props import StringProperty, BoolProperty
 from bpy.props import StringProperty, IntProperty
 
-from ..utils import collection_containing_armature
+from ..utils.remove_original import resolve_collection_for_remove_original
 
 ADDON_NAME = __package__.rsplit(".", 1)[0] if "." in __package__ else __package__
 
@@ -531,9 +531,10 @@ class DLM_OT_migrator_remove_original(Operator):
         if removed_actions:
             self.report({"INFO"}, f"Removed {len(removed_actions)} action(s) from original")
 
+        props = context.scene.dynamic_link_manager
+        rig_family = getattr(props, "migrator_rig_family", "RIGIFY")
         try:
-            # Try to find and delete the collection containing the original character
-            coll = collection_containing_armature(orig)
+            coll = resolve_collection_for_remove_original(orig, rig_family, context.scene)
             if coll:
                 coll_name = coll.name  # Store name BEFORE removal (RNA invalidates after remove)
                 context.scene.dynamic_link_manager.original_character = None
@@ -541,10 +542,14 @@ class DLM_OT_migrator_remove_original(Operator):
                     bpy.data.collections.remove(coll)
                     self.report({"INFO"}, f"Removed collection: {coll_name}")
                 except Exception as remove_err:
-                    # Collection may have already been removed by another process
                     self.report({"WARNING"}, f"Collection {coll_name} removal issue: {remove_err}")
+                    try:
+                        bpy.data.objects.remove(orig, do_unlink=True)
+                        self.report({"INFO"}, f"Removed original object: {name}")
+                    except Exception as e2:
+                        self.report({"ERROR"}, f"Could not remove original after collection failure: {e2}")
+                        return {"CANCELLED"}
             else:
-                # Fallback: just delete the armature object
                 bpy.data.objects.remove(orig, do_unlink=True)
                 context.scene.dynamic_link_manager.original_character = None
                 self.report({"INFO"}, f"Removed original character: {name}")
