@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.1] - 2026-08-18
+
+### Fixed
+- RetargRelatives: do not rewrite orig's own Rigify bone constraints (stops orig snapping to rep); remap constraint/DOF/driver IDs on other owners.
+- Remove Original: remap leftover orig→rep refs, drop unused override armatures, and purge orig's unused linked libraries.
+
 ## [0.4.0] - 2026-03-25
 
 ### Added
