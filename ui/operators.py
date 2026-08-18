@@ -9,7 +9,7 @@ from bpy.types import Operator
 from bpy.props import StringProperty, BoolProperty
 from bpy.props import StringProperty, IntProperty
 
-from ..utils.remove_original import resolve_collection_for_remove_original
+from ..utils.remove_original import run_remove_original
 
 ADDON_NAME = __package__.rsplit(".", 1)[0] if "." in __package__ else __package__
 
@@ -513,79 +513,8 @@ class DLM_OT_migrator_remove_original(Operator):
             self.report({"ERROR"}, "Original and replacement cannot be the same object")
             return {"CANCELLED"}
 
-        name = orig.name
-
-        # Collect actions from original character before removal
-        actions_to_remove = set()
-        if orig.animation_data:
-            # Active action
-            if orig.animation_data.action:
-                actions_to_remove.add(orig.animation_data.action)
-            # NLA strips
-            for track in orig.animation_data.nla_tracks:
-                for strip in track.strips:
-                    if strip.action:
-                        actions_to_remove.add(strip.action)
-
-        # Remove collected actions from bpy.data.actions
-        removed_actions = []
-        for action in actions_to_remove:
-            action_name = action.name
-            try:
-                bpy.data.actions.remove(action)
-                removed_actions.append(action_name)
-            except Exception as e:
-                self.report({"WARNING"}, f"Could not remove action {action_name}: {e}")
-
-        if removed_actions:
-            self.report({"INFO"}, f"Removed {len(removed_actions)} action(s) from original")
-
-        props = context.scene.dynamic_link_manager
-        rig_family = getattr(props, "migrator_rig_family", "RIGIFY")
-        try:
-            coll = resolve_collection_for_remove_original(orig, rig_family, context.scene, rep)
-            if coll:
-                coll_name = coll.name  # Store name BEFORE removal (RNA invalidates after remove)
-                context.scene.dynamic_link_manager.original_character = None
-                try:
-                    bpy.data.collections.remove(coll)
-                    self.report({"INFO"}, f"Removed collection: {coll_name}")
-                except Exception as remove_err:
-                    self.report({"WARNING"}, f"Collection {coll_name} removal issue: {remove_err}")
-                    try:
-                        bpy.data.objects.remove(orig, do_unlink=True)
-                        self.report({"INFO"}, f"Removed original object: {name}")
-                    except Exception as e2:
-                        self.report({"ERROR"}, f"Could not remove original after collection failure: {e2}")
-                        return {"CANCELLED"}
-            else:
-                bpy.data.objects.remove(orig, do_unlink=True)
-                context.scene.dynamic_link_manager.original_character = None
-                self.report({"INFO"}, f"Removed original character: {name}")
-        except Exception as e:
-            self.report({"ERROR"}, f"Failed to remove original: {e}")
+        if not run_remove_original(context, orig, rep, self.report):
             return {"CANCELLED"}
-
-        # Rename replacement actions with ".rep" suffix
-        if rep and rep.animation_data:
-            renamed_actions = []
-            # Active action
-            if rep.animation_data.action and ".rep" in rep.animation_data.action.name:
-                old_name = rep.animation_data.action.name
-                new_name = old_name.replace(".rep", "")
-                rep.animation_data.action.name = new_name
-                renamed_actions.append(f"{old_name} -> {new_name}")
-            # NLA strips
-            for track in rep.animation_data.nla_tracks:
-                for strip in track.strips:
-                    if strip.action and ".rep" in strip.action.name:
-                        old_name = strip.action.name
-                        new_name = old_name.replace(".rep", "")
-                        strip.action.name = new_name
-                        renamed_actions.append(f"{old_name} -> {new_name}")
-            if renamed_actions:
-                self.report({"INFO"}, f"Renamed {len(renamed_actions)} replacement action(s)")
-
         return {"FINISHED"}
 
 class DLM_OT_picker_original_character(Operator):

@@ -10,6 +10,7 @@ from contextlib import contextmanager
 import bpy
 
 from ..utils import descendants, collection_containing_armature
+from ..utils.remap_usages import remap_object_usages
 
 
 def _first_view3d_area(context):
@@ -522,7 +523,11 @@ def run_mig_bone_const(orig, rep, orig_to_rep):
 
 
 def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
-    """Retarget relations: parents, constraint targets, Armature modifiers to rep. Skip objects in orig's hierarchy (linked collection)."""
+    """Retarget relations: parents, constraint/driver/DOF targets, Armature modifiers to rep.
+
+    Skips orig's own Rigify bone constraints and orig's self-drivers so orig
+    does not snap to rep. Object constraints on orig's children (eyes) still remap.
+    """
     # Replicate orig's parent on rep if it exists (keep world transform)
     if orig.parent is not None:
         # Store world matrix before reparenting
@@ -550,30 +555,17 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
                 if getattr(m, "object", None) == orig:
                     m.object = rep
 
-    # Retarget constraints on ALL objects (including orig hierarchy like eyes)
-    for ob in bpy.data.objects:
-        for c in getattr(ob, "constraints", []):
-            if getattr(c, "target", None) == orig:
-                c.target = rep
-
-    # Retarget bone constraints on ALL armatures (other characters, etc.)
-    for ob in bpy.data.objects:
-        if ob.type != "ARMATURE" or not ob.pose:
-            continue
-        for pbone in ob.pose.bones:
-            for c in pbone.constraints:
-                if getattr(c, "target", None) == orig:
-                    c.target = rep
-
-    # Camera DOF: retarget focus_object from orig to rep
-    for ob in bpy.data.objects:
-        if ob.type != 'CAMERA':
-            continue
-        camera = ob.data
-        if not camera.dof:
-            continue
-        if camera.dof.focus_object == orig:
-            camera.dof.focus_object = rep
+    # Object constraints (incl. orig children like eyes), other armatures' bone
+    # constraints, armature mods, camera DOF, and drivers on non-orig owners.
+    # Skip orig's own Rigify bone constraints and orig's self-drivers so orig
+    # does not snap to rep before Remove Original.
+    remap_object_usages(
+        orig,
+        rep,
+        orig_to_rep=orig_to_rep,
+        skip_bone_constraints_on={orig},
+        skip_self_drivers_on={orig},
+    )
 
 
 def _base_body_name_match(ob):
