@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.4.2] - 2026-08-18
+
+### Fixed
+- MigFKRot bake: write to a dedicated top REPLACE `FK_Bake_*` layer/action instead of the active ALS action.
+- MigNLA / MigFKRot: select the topmost Animation Layers track so the NLA stack evaluates.
+
 ## [0.4.1] - 2026-08-18
 
 ### Fixed
