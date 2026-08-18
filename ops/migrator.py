@@ -245,6 +245,15 @@ def _mirror_als_turn_on(orig, rep):
             pass
 
 
+def _activate_topmost_als(context, orig, rep):
+    """Select the topmost Animation Layers track on orig and rep after MigNLA."""
+    from .fk_rotations import _activate_topmost_nla
+    if context is None:
+        context = bpy.context
+    _activate_topmost_nla(context, orig, log_prefix="[DLM MigNLA]")
+    _activate_topmost_nla(context, rep, log_prefix="[DLM MigNLA]")
+
+
 def _duplicate_action(src_action, suffix=".rep"):
     """Duplicate an action, returning the new action with a unique name."""
     if src_action is None:
@@ -313,6 +322,7 @@ def run_mig_nla(orig, rep, report=None, context=None):
         _slot_debug("Rep (after)", rad)
         with _rep_active_for_animlayers(context, rep):
             _mirror_als_turn_on(orig, rep)
+            _activate_topmost_als(context, orig, rep)
         if report:
             report({"INFO"}, "No NLA detected, active action (duplicated) and slot copied to Replacement Armature.")
         return
@@ -361,6 +371,7 @@ def run_mig_nla(orig, rep, report=None, context=None):
         prev_track = new_track
     with _rep_active_for_animlayers(context, rep):
         _mirror_als_turn_on(orig, rep)
+        _activate_topmost_als(context, orig, rep)
     if report:
         _debug_als_lookup(orig)
         has_als = _has_als_anywhere(orig)
