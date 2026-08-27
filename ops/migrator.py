@@ -272,6 +272,74 @@ def _duplicate_action(src_action, suffix=".rep"):
     return new_action
 
 
+def _slot_identifier(slot):
+    """Stable string id for an ActionSlot (Blender 4.4+)."""
+    if slot is None:
+        return None
+    return (
+        getattr(slot, "identifier", None)
+        or getattr(slot, "name_display", None)
+        or getattr(slot, "name", None)
+    )
+
+
+def _find_action_slot(action, identifier):
+    """Find a slot on action matching identifier; if only one slot exists, use it."""
+    if not action or not hasattr(action, "slots"):
+        return None
+    slots = action.slots
+    if not slots:
+        return None
+    if identifier:
+        for slot in slots:
+            for attr in ("identifier", "name_display", "name"):
+                if getattr(slot, attr, None) == identifier:
+                    return slot
+    if len(slots) == 1:
+        return slots[0]
+    return None
+
+
+def _copy_action_slot(src_owner, dst_owner, dst_action, log_prefix="[DLM MigNLA]"):
+    """
+    Assign dst_owner.action_slot to the slot on dst_action that matches src_owner.
+
+    Slots are owned by their Action; copying ``src.action_slot`` directly onto a
+    duplicated action fails or leaves None. Match by identifier instead (1:1).
+    Works for AnimData and NlaStrip.
+    """
+    if dst_owner is None or dst_action is None or not hasattr(dst_owner, "action_slot"):
+        return False
+
+    src_slot = getattr(src_owner, "action_slot", None) if src_owner else None
+    ident = _slot_identifier(src_slot)
+    if not ident and src_owner is not None and hasattr(src_owner, "last_slot_identifier"):
+        ident = src_owner.last_slot_identifier or None
+
+    if ident and hasattr(dst_owner, "last_slot_identifier"):
+        try:
+            dst_owner.last_slot_identifier = ident
+        except Exception as e:
+            print(f"{log_prefix} last_slot_identifier assign failed: {e}")
+
+    slot = _find_action_slot(dst_action, ident)
+    if slot is None:
+        print(
+            f"{log_prefix} no matching slot for identifier={ident!r} "
+            f"on action={dst_action.name!r} "
+            f"(slots={[ _slot_identifier(s) for s in getattr(dst_action, 'slots', []) ]})"
+        )
+        return False
+
+    try:
+        dst_owner.action_slot = slot
+        print(f"{log_prefix} set action_slot={_slot_identifier(slot)!r} on {type(dst_owner).__name__}")
+        return True
+    except Exception as e:
+        print(f"{log_prefix} action_slot assign failed: {e}")
+        return False
+
+
 def run_mig_nla(orig, rep, report=None, context=None):
     """Migrate NLA: copy tracks and strips to replacement; or mirror action slot when no NLA (MigNLA).
     Actions are duplicated so repchar has independent copies.
@@ -299,22 +367,22 @@ def run_mig_nla(orig, rep, report=None, context=None):
                     if hasattr(v, "identifier"):
                         v = getattr(v, "identifier", v)
                     print(f"[DLM MigNLA]   {p}={v!r}")
+            if a is not None and hasattr(a, "slots"):
+                print(f"[DLM MigNLA]   action.slots={[ _slot_identifier(s) for s in a.slots ]}")
         _slot_debug("Orig (before)", ad)
         _slot_debug("Rep (before)", rad)
         # Duplicate the active action for repchar
         dup_action = _duplicate_action(active_action, suffix=".rep")
-        # Copy last_slot_identifier before action so slot is resolved when assigning (4.4+).
+        # Prefer last_slot_identifier before action so Blender can resolve the slot.
         if hasattr(ad, "last_slot_identifier") and hasattr(rad, "last_slot_identifier") and ad.last_slot_identifier:
-            rad.last_slot_identifier = ad.last_slot_identifier
-            print(f"[DLM MigNLA] set rep last_slot_identifier={ad.last_slot_identifier!r}")
-        rad.action = dup_action
-        # Copy Action Slot and related props (Blender 4.4+ slotted actions).
-        if getattr(ad, "action_slot", None) and getattr(rad, "action_slot", None):
             try:
-                rad.action_slot = ad.action_slot
-                print(f"[DLM MigNLA] set rep action_slot={getattr(ad.action_slot, 'identifier', ad.action_slot)!r}")
+                rad.last_slot_identifier = ad.last_slot_identifier
+                print(f"[DLM MigNLA] set rep last_slot_identifier={ad.last_slot_identifier!r}")
             except Exception as e:
-                print(f"[DLM MigNLA] rad.action_slot assign failed: {e}")
+                print(f"[DLM MigNLA] last_slot_identifier assign failed: {e}")
+        rad.action = dup_action
+        # Bind the duplicated action's own matching slot (not orig's slot pointer).
+        _copy_action_slot(ad, rad, dup_action)
         for prop in ("action_blend_type", "action_extrapolation", "action_influence"):
             if hasattr(ad, prop) and hasattr(rad, prop):
                 setattr(rad, prop, getattr(ad, prop))
@@ -331,6 +399,7 @@ def run_mig_nla(orig, rep, report=None, context=None):
     rep_tracks = rep.animation_data.nla_tracks
     existing_names = {t.name for t in rep_tracks}
     prev_track = rep_tracks[-1] if rep_tracks else None
+    action_map = {}  # orig action -> duplicated .rep action (1:1 reuse)
     for track in ad.nla_tracks:
         new_track = rep_tracks.new(prev=prev_track)
         name = track.name
@@ -347,7 +416,10 @@ def run_mig_nla(orig, rep, report=None, context=None):
         for strip in track.strips:
             if strip.type != "CLIP" or not strip.action:
                 continue
-            dup_action = _duplicate_action(strip.action, suffix=".rep")
+            dup_action = action_map.get(strip.action)
+            if dup_action is None:
+                dup_action = _duplicate_action(strip.action, suffix=".rep")
+                action_map[strip.action] = dup_action
             new_strip = new_track.strips.new(
                 strip.name, int(strip.frame_start), dup_action
             )
@@ -368,7 +440,38 @@ def run_mig_nla(orig, rep, report=None, context=None):
             new_strip.use_animated_time = strip.use_animated_time
             new_strip.use_animated_time_cyclic = strip.use_animated_time_cyclic
             new_strip.use_sync_length = strip.use_sync_length
+            # Strip action_slot must point at a slot on the duplicated action.
+            _copy_action_slot(strip, new_strip, dup_action)
         prev_track = new_track
+
+    # Also mirror active action + slot when orig has one (ALS / mixed setups).
+    if active_action is not None:
+        rad = rep.animation_data
+        dup_active = action_map.get(active_action)
+        created_dup = False
+        if dup_active is None:
+            dup_active = _duplicate_action(active_action, suffix=".rep")
+            created_dup = True
+        if hasattr(ad, "last_slot_identifier") and hasattr(rad, "last_slot_identifier") and ad.last_slot_identifier:
+            try:
+                rad.last_slot_identifier = ad.last_slot_identifier
+            except Exception:
+                pass
+        # ALS may make action read-only; only assign when writable.
+        try:
+            if not rad.is_property_readonly("action"):
+                rad.action = dup_active
+                _copy_action_slot(ad, rad, dup_active)
+            else:
+                print("[DLM MigNLA] rep.action is read-only (ALS); strip slots already copied")
+                if created_dup and dup_active and dup_active.users == 0:
+                    try:
+                        bpy.data.actions.remove(dup_active)
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"[DLM MigNLA] active action mirror skipped: {e}")
+
     with _rep_active_for_animlayers(context, rep):
         _mirror_als_turn_on(orig, rep)
         _activate_topmost_als(context, orig, rep)
