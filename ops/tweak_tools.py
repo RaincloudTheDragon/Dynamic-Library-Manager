@@ -7,6 +7,8 @@
 
 import bpy
 
+from ..utils.nla_bake import bake_pose_to_replace_layer
+
 # Rigify-style tweak bone names (only those present on armature are used)
 ARM_TWEAK_BONES = (
     "upper_arm_tweak.L", "upper_arm_tweak.R",
@@ -91,7 +93,7 @@ def _frame_range_from_track(rep, track_name):
 
 def bake_tweak_constraints(context, orig, rep, limb, track_name, post_clean):
     """
-    Select rep's tweak bones, run nla.bake, optionally run clean + decimate.
+    Bake tweak bones to a dedicated top REPLACE NLA/ALS layer (same as MigFKRot).
     Returns (True, message) or (False, error_message).
     """
     names = get_tweak_bones(rep, limb)
@@ -104,55 +106,24 @@ def bake_tweak_constraints(context, orig, rep, limb, track_name, post_clean):
         frame_range = (scene.frame_start, scene.frame_end)
     frame_start, frame_end = frame_range
 
-    # Ensure rep is active and in pose mode
-    if context.view_layer.objects.active != rep:
-        context.view_layer.objects.active = rep
-    if rep.mode != "POSE":
-        bpy.ops.object.mode_set(mode="POSE")
+    layer_name = f"Tweak_{limb}_{frame_start}-{frame_end}"
+    ok, msg, _track, _action = bake_pose_to_replace_layer(
+        context,
+        orig,
+        rep,
+        names,
+        frame_start=frame_start,
+        frame_end=frame_end,
+        layer_name=layer_name,
+        channel_types={"LOCATION", "ROTATION"},
+        clear_constraints=True,
+        clear_parents=True,
+        post_clean=post_clean,
+        log_prefix=f"[DLM Tweak Bake {limb}]",
+    )
+    if not ok:
+        return False, msg
 
-    # Select only tweak bones on rep
-    bpy.ops.pose.select_all(action="DESELECT")
-    for name in names:
-        rep.pose.bones[name].select = True
-
-    # Bake
-    try:
-        bpy.ops.nla.bake(
-            frame_start=frame_start,
-            frame_end=frame_end,
-            step=1,
-            only_selected=True,
-            visual_keying=True,
-            clear_constraints=True,
-            clear_parents=True,
-            use_current_action=True,
-            clean_curves=False,
-            bake_types={"POSE"},
-            channel_types={"LOCATION", "ROTATION"},
-        )
-    except Exception as e:
-        return False, str(e)
-
-    if not post_clean:
-        return True, f"Baked {len(names)} tweak bones ({frame_start}-{frame_end})."
-
-    # Post-clean: find an area we can use for action/graph ops
-    win = context.window
-    for area in win.screen.areas:
-        if area.type == "DOPESHEET_EDITOR":
-            with context.temp_override(window=win, area=area):
-                try:
-                    bpy.ops.action.clean_keyframes()
-                except Exception:
-                    pass
-            break
-    for area in win.screen.areas:
-        if area.type == "GRAPH_EDITOR":
-            with context.temp_override(window=win, area=area):
-                try:
-                    bpy.ops.graph.decimate(mode="ERROR", error=0.001)
-                except Exception:
-                    pass
-            break
-
-    return True, f"Baked and cleaned {len(names)} tweak bones ({frame_start}-{frame_end})."
+    if post_clean:
+        return True, f"Baked and cleaned {len(names)} tweak bones ({frame_start}-{frame_end})."
+    return True, f"Baked {len(names)} tweak bones ({frame_start}-{frame_end})."

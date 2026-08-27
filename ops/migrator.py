@@ -247,11 +247,11 @@ def _mirror_als_turn_on(orig, rep):
 
 def _activate_topmost_als(context, orig, rep):
     """Select the topmost Animation Layers track on orig and rep after MigNLA."""
-    from .fk_rotations import _activate_topmost_nla
+    from ..utils.nla_bake import activate_topmost_nla
     if context is None:
         context = bpy.context
-    _activate_topmost_nla(context, orig, log_prefix="[DLM MigNLA]")
-    _activate_topmost_nla(context, rep, log_prefix="[DLM MigNLA]")
+    activate_topmost_nla(context, orig, log_prefix="[DLM MigNLA]")
+    activate_topmost_nla(context, rep, log_prefix="[DLM MigNLA]")
 
 
 def _duplicate_action(src_action, suffix=".rep"):
