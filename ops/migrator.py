@@ -637,48 +637,90 @@ def run_mig_bone_const(orig, rep, orig_to_rep):
 
 
 def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
-    """Retarget relations: parents, constraint/driver/DOF targets, Armature modifiers to rep.
+    """Retarget relations: parents, constraint/driver/DOF targets, modifiers to rep.
+
+    Builds a name map across orig/rep override collections (GEO meshes, etc.), not
+    only the armature, so scene refs to GEO-GOCART remap to the replacement GEO.
 
     Skips orig's own Rigify bone constraints and orig's self-drivers so orig
     does not snap to rep. Object constraints on orig's children (eyes) still remap.
     """
+    from ..utils.remap_usages import (
+        build_override_collection_object_map,
+        override_root_collection,
+    )
+
+    # Full asset-instance map: RIG + GEO + Jiffy/helpers under the override root.
+    collection_map = build_override_collection_object_map(orig, rep)
+    mapping = {}
+    if orig_to_rep:
+        mapping.update(orig_to_rep)
+    mapping.update(collection_map)
+    mapping[orig] = rep
+
     # Replicate orig's parent on rep if it exists (keep world transform)
     if orig.parent is not None:
-        # Store world matrix before reparenting
         world_matrix = rep.matrix_world.copy()
-        rep.parent = orig.parent
+        # If orig was parented to something that also remaps, use the mapped parent.
+        rep.parent = mapping.get(orig.parent, orig.parent)
         rep.parent_type = orig.parent_type
         rep.parent_bone = orig.parent_bone
-        # Restore world matrix
         rep.matrix_world = world_matrix
 
+    mapped_srcs = set(mapping.keys())
     orig_hierarchy = {orig} | descendants(orig)
     candidates = set(rep_descendants)
     for ob in bpy.data.objects:
-        if getattr(ob.parent, "name", None) == orig.name:
+        if ob.parent in mapped_srcs:
             candidates.add(ob)
         for c in getattr(ob, "constraints", []):
-            if getattr(c, "target", None) == orig:
+            if getattr(c, "target", None) in mapped_srcs:
                 candidates.add(ob)
-    candidates -= orig_hierarchy
-    for ob in candidates:
-        if ob.parent == orig:
-            ob.parent = rep
-        if ob.type == "MESH" and ob.modifiers:
+        if ob.modifiers:
             for m in ob.modifiers:
-                if getattr(m, "object", None) == orig:
-                    m.object = rep
+                for attr in ("object", "target", "mirror_object"):
+                    if getattr(m, attr, None) in mapped_srcs:
+                        candidates.add(ob)
+                        break
+    candidates -= orig_hierarchy
+    # Exclude orig-side asset objects (GEO/Jiffy/etc.) — they go away with Remove Original.
+    candidates -= mapped_srcs
 
-    # Object constraints (incl. orig children like eyes), other armatures' bone
-    # constraints, armature mods, camera DOF, and drivers on non-orig owners.
-    # Skip orig's own Rigify bone constraints and orig's self-drivers so orig
-    # does not snap to rep before Remove Original.
+    for ob in candidates:
+        if ob.parent in mapping:
+            ob.parent = mapping[ob.parent]
+        if ob.modifiers:
+            for m in ob.modifiers:
+                for attr in ("object", "target", "mirror_object"):
+                    val = getattr(m, attr, None)
+                    if val in mapping:
+                        try:
+                            setattr(m, attr, mapping[val])
+                        except Exception:
+                            pass
+
+    # Collection instances pointing at orig's asset root → rep's root.
+    orig_root = override_root_collection(orig)
+    rep_root = override_root_collection(rep)
+    if orig_root is not None and rep_root is not None and orig_root != rep_root:
+        for ob in bpy.data.objects:
+            if getattr(ob, "instance_collection", None) is orig_root:
+                try:
+                    ob.instance_collection = rep_root
+                except Exception:
+                    pass
+
+    # Object constraints (incl. eyes/GEO targets), bone constraints, all modifier
+    # Object pointers, camera DOF, drivers — using the full collection map.
+    # Do not rewrite pointers owned by orig-side asset objects (GEO→RIG, etc.).
+    skip_arms = {o for o in mapped_srcs if getattr(o, "type", None) == "ARMATURE"}
     remap_object_usages(
         orig,
         rep,
-        orig_to_rep=orig_to_rep,
-        skip_bone_constraints_on={orig},
-        skip_self_drivers_on={orig},
+        orig_to_rep=mapping,
+        skip_bone_constraints_on=skip_arms or {orig},
+        skip_self_drivers_on=mapped_srcs or {orig},
+        skip_owners=mapped_srcs or {orig},
     )
 
 

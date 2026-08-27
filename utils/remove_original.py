@@ -610,9 +610,13 @@ def run_remove_original(context, orig, rep, report):
     orphan_entries = snapshot_ids_for_remove_original(orig, coll, rep, orig_lib_paths)
     keep_ids = {rep, getattr(rep, "data", None)} if rep is not None else set()
 
-    # Final sweep: remap remaining scene refs off orig (orig is about to die).
+    # Final sweep: remap remaining scene refs off orig (+ GEO/Jiffy in its override).
     if rep is not None and orig != rep:
-        remap_object_usages(orig, rep, orig_to_rep={orig: rep})
+        from .remap_usages import build_override_collection_object_map
+
+        mapping = build_override_collection_object_map(orig, rep)
+        mapping[orig] = rep
+        remap_object_usages(orig, rep, orig_to_rep=mapping)
 
     # Only drop orig actions that nothing surviving still uses (incl. rep).
     removed_actions = []
