@@ -323,6 +323,214 @@ def remove_unused_override_armatures(keep=None):
     return removed
 
 
+def _all_objects_in_collection(coll):
+    """All objects in coll and nested child collections."""
+    out = set()
+    if coll is None:
+        return out
+
+    def walk(c):
+        for ob in c.objects:
+            out.add(ob)
+        for child in c.children:
+            walk(child)
+
+    walk(coll)
+    return out
+
+
+def _rna_id_key(idb):
+    """(bl_rna.identifier, name) for later lookup after pointers die."""
+    if idb is None:
+        return None
+    try:
+        return (idb.bl_rna.identifier, idb.name)
+    except Exception:
+        return None
+
+
+def _data_collection_for_kind(kind):
+    """Map RNA type identifier to a bpy.data collection, or None."""
+    mapping = {
+        "Object": bpy.data.objects,
+        "Armature": bpy.data.armatures,
+        "Mesh": bpy.data.meshes,
+        "Curve": bpy.data.curves,
+        "MetaBall": bpy.data.metaballs,
+        "Lattice": bpy.data.lattices,
+        "Camera": bpy.data.cameras,
+        "Light": bpy.data.lights,
+        "LightProbe": bpy.data.lightprobes,
+        "Speaker": bpy.data.speakers,
+        "Volume": bpy.data.volumes,
+        "GreasePencil": getattr(bpy.data, "grease_pencils", None),
+        "GreasePencilv3": getattr(bpy.data, "grease_pencils_v3", None)
+        or getattr(bpy.data, "grease_pencils", None),
+        "Collection": bpy.data.collections,
+        "Action": bpy.data.actions,
+        "Material": bpy.data.materials,
+        "NodeTree": bpy.data.node_groups,
+    }
+    return mapping.get(kind)
+
+
+def _add_id_and_override_refs(entries, idb):
+    """Record an ID and its override reference (linked source) for later orphan purge."""
+    key = _rna_id_key(idb)
+    if key:
+        entries.add(key)
+    ol = getattr(idb, "override_library", None) if idb else None
+    ref = getattr(ol, "reference", None) if ol else None
+    ref_key = _rna_id_key(ref)
+    if ref_key:
+        entries.add(ref_key)
+
+
+def snapshot_ids_for_remove_original(orig, coll, rep, lib_paths):
+    """
+    Names of IDs that should die with orig (objects in remove set + their .data +
+    override sources + any ID still belonging to orig's libraries).
+
+    Returns a set of (rna_type, name). Pointers are invalid after delete; look up by name.
+    """
+    entries = set()
+    objs = set()
+    if orig is not None:
+        objs.add(orig)
+    objs |= _all_objects_in_collection(coll)
+
+    # Children parented under orig but possibly outside the collection.
+    for ob in bpy.data.objects:
+        p = ob.parent
+        while p is not None:
+            if p in objs:
+                objs.add(ob)
+                break
+            p = p.parent
+
+    for ob in objs:
+        if rep is not None and ob == rep:
+            continue
+        _add_id_and_override_refs(entries, ob)
+        data = getattr(ob, "data", None)
+        if data is not None:
+            _add_id_and_override_refs(entries, data)
+
+    if coll is not None and (rep is None or not _collection_contains_object_recursive(coll, rep)):
+        _add_id_and_override_refs(entries, coll)
+
+    # Library-owned IDs (incl. indirect armature sources) so localization leftovers are caught.
+    for filepath in lib_paths or ():
+        for kind, coll_data in (
+            ("Object", bpy.data.objects),
+            ("Armature", bpy.data.armatures),
+            ("Mesh", bpy.data.meshes),
+            ("Collection", bpy.data.collections),
+        ):
+            for idb in coll_data:
+                if _id_belongs_to_library(idb, filepath):
+                    entries.add((kind, idb.name))
+
+    # Never treat rep (or its armature data) as removable.
+    if rep is not None:
+        entries.discard(_rna_id_key(rep))
+        if getattr(rep, "data", None) is not None:
+            entries.discard(_rna_id_key(rep.data))
+
+    return entries
+
+
+def _id_used_by_in_scene_object(idb):
+    """True if an in-scene object is this ID or uses it as .data."""
+    if idb is None:
+        return False
+    for ob in bpy.data.objects:
+        if not ob.users_scene:
+            continue
+        if ob == idb:
+            return True
+        if getattr(ob, "data", None) == idb:
+            return True
+    return False
+
+
+def purge_snapshotted_orphan_ids(entries, keep_ids, report=None):
+    """
+    Clear fake users and delete snapshotted IDs that nothing in-scene still uses.
+
+    keep_ids: set of live ID pointers (e.g. rep, rep.data) that must never be removed.
+    Returns list of \"Type:name\" removed.
+    """
+    if not entries:
+        return []
+    keep_ids = {k for k in (keep_ids or ()) if k is not None}
+    keep_keys = {_rna_id_key(k) for k in keep_ids}
+    keep_keys.discard(None)
+
+    removed = []
+
+    # Objects first so armature/mesh user counts drop, then data-blocks.
+    ordered = sorted(entries, key=lambda kn: (0 if kn[0] == "Object" else 1, kn[0], kn[1]))
+    for kind, name in ordered:
+        if (kind, name) in keep_keys:
+            continue
+        coll_data = _data_collection_for_kind(kind)
+        if coll_data is None:
+            continue
+        idb = coll_data.get(name)
+        if idb is None or idb in keep_ids:
+            continue
+        if _id_used_by_in_scene_object(idb):
+            continue
+        if kind == "Object" and getattr(idb, "users_scene", None):
+            continue
+
+        try:
+            if getattr(idb, "use_fake_user", False):
+                idb.use_fake_user = False
+        except Exception:
+            pass
+
+        try:
+            if kind == "Object":
+                bpy.data.objects.remove(idb, do_unlink=True)
+                removed.append(f"{kind}:{name}")
+            elif getattr(idb, "users", 1) == 0:
+                coll_data.remove(idb)
+                removed.append(f"{kind}:{name}")
+        except Exception as e:
+            if report:
+                report({"WARNING"}, f"Could not purge {kind}:{name}: {e}")
+
+    # Second pass: data-blocks that only lost users after object removal.
+    for kind, name in ordered:
+        if kind == "Object" or (kind, name) in keep_keys:
+            continue
+        coll_data = _data_collection_for_kind(kind)
+        if coll_data is None:
+            continue
+        idb = coll_data.get(name)
+        if idb is None or idb in keep_ids:
+            continue
+        if _id_used_by_in_scene_object(idb):
+            continue
+        try:
+            if getattr(idb, "use_fake_user", False):
+                idb.use_fake_user = False
+        except Exception:
+            pass
+        try:
+            if getattr(idb, "users", 1) == 0:
+                coll_data.remove(idb)
+                label = f"{kind}:{name}"
+                if label not in removed:
+                    removed.append(label)
+        except Exception:
+            pass
+
+    return removed
+
+
 def _action_used_by(action, ob):
     """True if ob's animation_data still references action (active or NLA)."""
     if not action or not ob:
@@ -388,7 +596,19 @@ def run_remove_original(context, orig, rep, report):
     from .remap_usages import remap_object_usages
 
     name = orig.name
-    orig_lib_paths = collect_id_library_paths(orig)
+    props = context.scene.dynamic_link_manager
+    rig_family = getattr(props, "migrator_rig_family", "RIGIFY")
+    coll = resolve_collection_for_remove_original(orig, rig_family, context.scene, rep)
+
+    # Libraries + IDs that must die with orig (capture before pointers are invalidated).
+    orig_lib_paths = set(collect_id_library_paths(orig))
+    for ob in _all_objects_in_collection(coll):
+        orig_lib_paths |= collect_id_library_paths(ob)
+        data = getattr(ob, "data", None)
+        if data is not None:
+            orig_lib_paths |= collect_id_library_paths(data)
+    orphan_entries = snapshot_ids_for_remove_original(orig, coll, rep, orig_lib_paths)
+    keep_ids = {rep, getattr(rep, "data", None)} if rep is not None else set()
 
     # Final sweep: remap remaining scene refs off orig (orig is about to die).
     if rep is not None and orig != rep:
@@ -417,10 +637,7 @@ def run_remove_original(context, orig, rep, report):
     if removed_actions:
         report({"INFO"}, f"Removed {len(removed_actions)} action(s) from original")
 
-    props = context.scene.dynamic_link_manager
-    rig_family = getattr(props, "migrator_rig_family", "RIGIFY")
     try:
-        coll = resolve_collection_for_remove_original(orig, rig_family, context.scene, rep)
         if coll:
             coll_name = coll.name
             context.scene.dynamic_link_manager.original_character = None
@@ -463,6 +680,13 @@ def run_remove_original(context, orig, rep, report):
             preview = "; ".join(leftovers[:8])
             extra = f" (+{len(leftovers) - 8} more)" if len(leftovers) > 8 else ""
             report({"WARNING"}, f"Library still in use ({lib_label}): {preview}{extra}")
+
+    # Library unlink can localize armature/mesh data with fake users; drop those orphans.
+    purged = purge_snapshotted_orphan_ids(orphan_entries, keep_ids, report=report)
+    if purged:
+        preview = ", ".join(purged[:12])
+        extra = f" (+{len(purged) - 12} more)" if len(purged) > 12 else ""
+        report({"INFO"}, f"Purged {len(purged)} leftover ID(s) from original: {preview}{extra}")
 
     return True
 
