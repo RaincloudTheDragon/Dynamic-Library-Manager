@@ -334,6 +334,33 @@ class DLM_OT_migrator_custom_properties(Operator):
             return {"CANCELLED"}
 
 
+class DLM_OT_migrator_object_constraints(Operator):
+    bl_idname = "dlm.migrator_object_constraints"
+    bl_label = "MigObjConst"
+    bl_description = (
+        "Migrate armature object constraints (Follow Path, Copy Location, etc.) "
+        "from original to replacement"
+    )
+    bl_icon = "CONSTRAINT"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        if not orig or not rep or orig == rep:
+            self.report({"ERROR"}, "No valid character pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_mig_obj_const
+
+            orig_to_rep = {orig: rep}
+            run_mig_obj_const(orig, rep, orig_to_rep)
+            self.report({"INFO"}, "Object constraints done.")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
 class DLM_OT_migrator_bone_constraints(Operator):
     bl_idname = "dlm.migrator_bone_constraints"
     bl_label = "MigBoneConst"
@@ -821,6 +848,7 @@ OPERATOR_CLASSES = [
     DLM_OT_migrator_copy_attributes,
     DLM_OT_migrator_migrate_nla,
     DLM_OT_migrator_custom_properties,
+    DLM_OT_migrator_object_constraints,
     DLM_OT_migrator_bone_constraints,
     DLM_OT_migrator_retarget_relations,
     DLM_OT_migrator_basebody_shapekeys,

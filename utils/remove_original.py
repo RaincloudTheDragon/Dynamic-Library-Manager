@@ -612,10 +612,12 @@ def run_remove_original(context, orig, rep, report):
 
     # Final sweep: remap remaining scene refs off orig (+ GEO/Jiffy in its override).
     if rep is not None and orig != rep:
-        from .remap_usages import build_override_collection_object_map
+        from .remap_usages import build_override_collection_object_map, remap_parents
 
         mapping = build_override_collection_object_map(orig, rep)
         mapping[orig] = rep
+        # Parents first — deleting orig otherwise clears them (e.g. RIG-Pallet-Jack).
+        remap_parents(mapping)
         remap_object_usages(orig, rep, orig_to_rep=mapping)
 
     # Only drop orig actions that nothing surviving still uses (incl. rep).

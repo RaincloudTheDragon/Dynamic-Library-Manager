@@ -299,6 +299,31 @@ def _remap_drivers_on(owner, mapping, skip_self_drivers_on):
     return n
 
 
+def remap_parents(mapping):
+    """Reparent objects whose parent is a mapping key onto the mapped target (keep world matrix)."""
+    if not mapping:
+        return 0
+    n = 0
+    # Snapshot first — reparenting mutates hierarchy while we iterate.
+    to_fix = [(ob, mapping[ob.parent]) for ob in bpy.data.objects if ob.parent in mapping]
+    for ob, new_parent in to_fix:
+        if ob in mapping:
+            # Orig-side asset objects die with Remove Original; leave their parents.
+            continue
+        if new_parent is None or ob == new_parent:
+            continue
+        world_matrix = ob.matrix_world.copy()
+        try:
+            ob.parent = new_parent
+            ob.matrix_world = world_matrix
+            n += 1
+        except Exception:
+            pass
+    if n:
+        print(f"[DLM remap] parents={n}")
+    return n
+
+
 def remap_object_usages(
     src,
     dst,

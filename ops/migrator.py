@@ -613,6 +613,32 @@ def _copy_constraint_props(c, nc, orig, rep, orig_to_rep):
                 pass
 
 
+def run_mig_obj_const(orig, rep, orig_to_rep):
+    """Object constraints: copy Follow Path / Copy Location / etc. from orig armature to rep.
+
+    Same RNA property copy + target retarget as MigBoneConst, but on the armature
+    object (not pose bones). Constraint names are preserved so MigNLA fcurves
+    (e.g. offset_factor, influence) keep binding.
+    """
+    other_originals = [o for o in orig_to_rep if o != orig]
+    to_remove = [c for c in rep.constraints if getattr(c, "target", None) in other_originals]
+    for c in to_remove:
+        rep.constraints.remove(c)
+
+    for c in orig.constraints:
+        nc = rep.constraints.new(type=c.type)
+        nc.name = c.name
+        _copy_constraint_props(c, nc, orig, rep, orig_to_rep)
+
+    while len(rep.constraints) > len(orig.constraints):
+        rep.constraints.remove(rep.constraints[-1])
+
+    print(
+        f"[DLM MigObjConst] {orig.name!r}->{rep.name!r}: "
+        f"{len(orig.constraints)} object constraint(s)"
+    )
+
+
 def run_mig_bone_const(orig, rep, orig_to_rep):
     """Bone constraints: remove stale on rep, copy from orig with full props (targets, etc.) and retarget, trim duplicates."""
     other_originals = [o for o in orig_to_rep if o != orig]
@@ -642,6 +668,10 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
     Builds a name map across orig/rep override collections (GEO meshes, etc.), not
     only the armature, so scene refs to GEO-GOCART remap to the replacement GEO.
 
+    External children parented to orig (e.g. RIG-Pallet-Jack) are reparented to rep.
+    Objects inside orig's own override collection are left alone — they die with
+    Remove Original.
+
     Skips orig's own Rigify bone constraints and orig's self-drivers so orig
     does not snap to rep. Object constraints on orig's children (eyes) still remap.
     """
@@ -668,7 +698,6 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
         rep.matrix_world = world_matrix
 
     mapped_srcs = set(mapping.keys())
-    orig_hierarchy = {orig} | descendants(orig)
     candidates = set(rep_descendants)
     for ob in bpy.data.objects:
         if ob.parent in mapped_srcs:
@@ -682,13 +711,18 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
                     if getattr(m, attr, None) in mapped_srcs:
                         candidates.add(ob)
                         break
-    candidates -= orig_hierarchy
-    # Exclude orig-side asset objects (GEO/Jiffy/etc.) — they go away with Remove Original.
+    # Exclude orig-side asset objects only (GEO/body/etc.) — NOT external children
+    # like a pallet jack parented to the character (those must remapped to rep).
     candidates -= mapped_srcs
 
     for ob in candidates:
         if ob.parent in mapping:
+            world_matrix = ob.matrix_world.copy()
             ob.parent = mapping[ob.parent]
+            try:
+                ob.matrix_world = world_matrix
+            except Exception:
+                pass
         if ob.modifiers:
             for m in ob.modifiers:
                 for attr in ("object", "target", "mirror_object"):
@@ -915,7 +949,10 @@ def run_mig_bbody_shapekeys(orig, rep, rep_descendants, context=None):
 
 def run_full_migration(context):
     """
-    Run the full 7-step character migration for the single pair (manual or automatic).
+    Run the full character migration for the single pair (manual or automatic).
+
+    Steps: CopyAttr, MigNLA, MigCustProps, MigObjConst, MigBoneConst,
+    RetargRelatives, MigBBodyShapeKeys.
     Returns (True, message) on success, (False, error_message) on failure.
     """
     props = getattr(context.scene, "dynamic_link_manager", None)
@@ -933,6 +970,7 @@ def run_full_migration(context):
         run_copy_attr(orig, rep)
         run_mig_nla(orig, rep, context=context)
         run_mig_cust_props(orig, rep)
+        run_mig_obj_const(orig, rep, orig_to_rep)
         run_mig_bone_const(orig, rep, orig_to_rep)
         run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep)
         run_mig_bbody_shapekeys(orig, rep, rep_descendants, context)
