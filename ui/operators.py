@@ -4,10 +4,17 @@
 # (at your option) any later version.
 
 import bpy
+import os
 from bpy.types import Operator
-from bpy.props import BoolProperty
+from bpy.props import BoolProperty, StringProperty
 
 from ..utils.remove_original import run_remove_original
+
+ADDON_NAME = __package__.rsplit(".", 1)[0] if "." in __package__ else __package__
+
+
+def _prefs(context):
+    return context.preferences.addons.get(ADDON_NAME)
 
 
 class DLM_OT_make_paths_relative(Operator):
@@ -39,6 +46,155 @@ class DLM_OT_make_paths_absolute(Operator):
         except Exception as e:
             self.report({"ERROR"}, f"Failed to make paths absolute: {e}")
             return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class DLM_OT_symlink_propagation(Operator):
+    """Launch Symlink Propagation wizard, or Continue (revert + apply) when stubs are ready."""
+
+    bl_idname = "dlm.symlink_propagation"
+    bl_label = "Symlink Propagation"
+    bl_description = (
+        "Stub + rempath missing libraries that contain armatures (pose data is lost if "
+        "those libs are missing on load). Other missing links: Atomic Remap (recommended), "
+        "FMT for images, or generic blendfile / External Data search"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    do_revert: BoolProperty(
+        name="Revert First",
+        description="Call File > Revert so libraries reload with stubs present",
+        default=True,
+    )
+    do_relative: BoolProperty(
+        name="Make Relative",
+        description="Run make_paths_relative after remapping",
+        default=True,
+    )
+
+    def invoke(self, context, event):
+        from ..utils import stub_handoff
+
+        session = stub_handoff.load_session()
+        status = (session or {}).get("status")
+        if status == stub_handoff.STATUS_STUBS_READY:
+            return context.window_manager.invoke_props_dialog(self, width=360)
+        return self.execute(context)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="Continue: apply modern paths from wizard pairs")
+        layout.prop(self, "do_revert")
+        layout.prop(self, "do_relative")
+        if bpy.data.is_dirty:
+            layout.label(text="Blend is dirty — revert will discard unsaved edits", icon="ERROR")
+
+    def execute(self, context):
+        from ..utils import path_normalize, stub_handoff
+
+        session = stub_handoff.load_session()
+        status = (session or {}).get("status")
+
+        if status == stub_handoff.STATUS_STUBS_READY:
+            return self._continue_apply(context, session)
+
+        if status == stub_handoff.STATUS_APPLY_DONE:
+            self.report(
+                {"INFO"},
+                "Apply already done — return to the wizard and click Teardown stubs.",
+            )
+            return {"FINISHED"}
+
+        if status == stub_handoff.STATUS_DONE:
+            stub_handoff.clear_session()
+            session = None
+            status = None
+
+        if status == stub_handoff.STATUS_OPENED:
+            if stub_handoff.wizard_appears_running(session):
+                self.report({"INFO"}, "Symlink Propagation wizard is already open.")
+                return {"FINISHED"}
+            # Stale session without a live wizard — start fresh below.
+            stub_handoff.clear_session()
+
+        missing = path_normalize.collect_missing_libraries()
+        if not missing:
+            self.report(
+                {"INFO"},
+                "No missing armature libraries — nothing to propagate. "
+                "Non-armature missing links: Atomic Remap (recommended), "
+                "FMT for images, or blendfile / External Data search.",
+            )
+            return {"FINISHED"}
+
+        from ..ui.preferences import parse_search_roots
+
+        roots: list[str] = []
+        addon = _prefs(context)
+        if addon and hasattr(addon.preferences, "symlink_search_roots"):
+            roots = parse_search_roots(addon.preferences.symlink_search_roots)
+
+        stub_handoff.create_session(
+            missing,
+            blend_filepath=bpy.data.filepath or "",
+            search_roots=roots,
+        )
+        result = stub_handoff.spawn_wizard(wait=False)
+        if not result.get("ok"):
+            stub_handoff.clear_session()
+            self.report({"ERROR"}, result.get("error") or "Failed to open wizard")
+            return {"CANCELLED"}
+        self.report(
+            {"INFO"},
+            f"Wizard opened with {len(missing)} missing armature library(ies). "
+            "After stubs are ready, click Symlink Propagation again to Continue.",
+        )
+        return {"FINISHED"}
+
+    def _continue_apply(self, context, session):
+        from ..utils import path_normalize, stub_handoff
+
+        plan = list((session or {}).get("pairs") or [])
+        if not plan:
+            self.report({"ERROR"}, "Session has no pairs — finish Create stubs in the wizard.")
+            return {"CANCELLED"}
+
+        if self.do_revert:
+            if not bpy.data.filepath:
+                self.report({"ERROR"}, "Save the blend before revert")
+                return {"CANCELLED"}
+            try:
+                bpy.ops.wm.revert_mainfile(use_scripts=False)
+            except Exception as e:
+                self.report({"ERROR"}, f"Revert failed: {e}")
+                return {"CANCELLED"}
+            session = stub_handoff.load_session() or session
+            plan = list((session or {}).get("pairs") or plan)
+
+        ok, missing = path_normalize.validate_archaic_present(plan)
+        if not ok:
+            preview = "; ".join(os.path.basename(m) for m in missing[:5])
+            self.report(
+                {"ERROR"},
+                f"{len(missing)} archaic path(s) still missing — create stubs in the wizard: {preview}",
+            )
+            return {"CANCELLED"}
+
+        stats = path_normalize.apply_modern_paths(plan)
+        n = sum(stats.values())
+        if self.do_relative:
+            try:
+                path_normalize.make_paths_relative()
+            except Exception as e:
+                stub_handoff.set_session_status(stub_handoff.STATUS_APPLY_DONE)
+                self.report({"WARNING"}, f"Remapped {n} path(s); make_relative failed: {e}")
+                return {"FINISHED"}
+
+        stub_handoff.set_session_status(stub_handoff.STATUS_APPLY_DONE)
+        self.report(
+            {"INFO"},
+            f"Remapped {n} path(s). Return to the wizard for teardown.",
+        )
         return {"FINISHED"}
 
 
@@ -649,6 +805,7 @@ class DLM_OT_tweak_bake_both(Operator):
 OPERATOR_CLASSES = [
     DLM_OT_make_paths_relative,
     DLM_OT_make_paths_absolute,
+    DLM_OT_symlink_propagation,
     DLM_OT_migrator_remove_original,
     DLM_OT_picker_original_character,
     DLM_OT_picker_replacement_character,
