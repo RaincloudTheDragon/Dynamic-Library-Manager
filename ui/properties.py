@@ -48,6 +48,13 @@ class DynamicLinkManagerProperties(PropertyGroup):
     )
     selected_asset_path: StringProperty(name="Selected Asset Path", default="")
 
+    # Character Migrator (collapsible): includes Situational Fixes + Tweak Tools
+    charmig_section_expanded: BoolProperty(
+        name="Character Migrator Expanded",
+        description="Show or hide the Character Migrator section",
+        default=True,
+    )
+
     # Character migrator: rig family (future ARP-specific migration; Remove Original uses it for collection resolution)
     migrator_rig_family: EnumProperty(
         name="Rig family",
