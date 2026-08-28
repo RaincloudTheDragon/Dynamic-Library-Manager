@@ -18,23 +18,14 @@ from .ui.properties import DynamicLinkManagerProperties
 from .ui.preferences import DynamicLinkManagerPreferences
 
 
-def ensure_default_search_path():
-    addon = bpy.context.preferences.addons.get(__name__)
-    if addon and len(addon.preferences.search_paths) == 0:
-        addon.preferences.search_paths.add().path = "//"
-
-
 def register():
     DynamicLinkManagerPreferences.bl_idname = __name__
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.dynamic_link_manager = bpy.props.PointerProperty(type=DynamicLinkManagerProperties)
-    bpy.app.handlers.load_post.append(ensure_default_search_path)
 
 
 def unregister():
-    if ensure_default_search_path in bpy.app.handlers.load_post:
-        bpy.app.handlers.load_post.remove(ensure_default_search_path)
     del bpy.types.Scene.dynamic_link_manager
     for cls in reversed(CLASSES):
         try:

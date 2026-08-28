@@ -6,48 +6,14 @@
 import bpy
 from bpy.types import PropertyGroup
 from bpy.props import (
-    IntProperty,
     StringProperty,
     BoolProperty,
-    CollectionProperty,
     PointerProperty,
     EnumProperty,
 )
 
 
-class SearchPathItem(PropertyGroup):
-    path: StringProperty(
-        name="Search Path",
-        description="Path to search for missing linked libraries",
-        subtype="DIR_PATH",
-    )
-
-
-class LinkedDatablockItem(PropertyGroup):
-    name: StringProperty(name="Name", description="Name of the linked datablock")
-    type: StringProperty(name="Type", description="Type of the linked datablock")
-
-
-class LinkedLibraryItem(PropertyGroup):
-    filepath: StringProperty(name="File Path", description="Path to the linked .blend file")
-    name: StringProperty(name="Name", description="Name of the linked .blend file")
-    is_missing: BoolProperty(name="Missing", description="True if the linked file is not found")
-    is_indirect: BoolProperty(name="Is Indirect", description="True if this is an indirectly linked library")
-    is_expanded: BoolProperty(name="Expanded", default=True)
-    linked_datablocks: CollectionProperty(type=LinkedDatablockItem, name="Linked Datablocks")
-
-
 class DynamicLinkManagerProperties(PropertyGroup):
-    linked_libraries: CollectionProperty(type=LinkedLibraryItem, name="Linked Libraries")
-    linked_libraries_index: IntProperty(name="Linked Libraries Index", default=0)
-    linked_assets_count: IntProperty(name="Linked Assets Count", default=0)
-    linked_libraries_section_expanded: BoolProperty(
-        name="Linked Libraries Analysis Expanded",
-        description="Show or hide the Linked Libraries Analysis section",
-        default=False,
-    )
-    selected_asset_path: StringProperty(name="Selected Asset Path", default="")
-
     # Character Migrator (collapsible): includes Situational Fixes + Tweak Tools
     charmig_section_expanded: BoolProperty(
         name="Character Migrator Expanded",

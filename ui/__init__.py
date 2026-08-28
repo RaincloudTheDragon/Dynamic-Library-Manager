@@ -4,19 +4,15 @@
 # (at your option) any later version.
 
 from .operators import OPERATOR_CLASSES
-from .panels import DLM_PT_main_panel, DLM_UL_library_list
+from .panels import DLM_PT_main_panel
 from .preferences import DynamicLinkManagerPreferences
 from . import properties
 
-PANEL_CLASSES = [DLM_PT_main_panel, DLM_UL_library_list]
+PANEL_CLASSES = [DLM_PT_main_panel]
 
 CLASSES = (
-    properties.SearchPathItem,
-    properties.LinkedDatablockItem,
-    properties.LinkedLibraryItem,
     properties.DynamicLinkManagerProperties,
     DynamicLinkManagerPreferences,
-    DLM_UL_library_list,
     DLM_PT_main_panel,
     *OPERATOR_CLASSES,
 )
