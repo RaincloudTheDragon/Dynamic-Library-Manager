@@ -614,11 +614,14 @@ def _copy_constraint_props(c, nc, orig, rep, orig_to_rep):
 
 
 def run_mig_obj_const(orig, rep, orig_to_rep):
-    """Object constraints: copy Follow Path / Copy Location / etc. from orig armature to rep.
+    """Object constraints + path parenting: copy armature object constraints; mirror parent.
 
-    Same RNA property copy + target retarget as MigBoneConst, but on the armature
-    object (not pose bones). Constraint names are preserved so MigNLA fcurves
-    (e.g. offset_factor, influence) keep binding.
+    Dennis-style: Follow Path / Copy Location live on the armature → copied 1:1 (names
+    preserved for MigNLA fcurves like offset_factor / influence).
+
+    Regina-style: armature has no object constraints but is parented to a cart/empty that
+    owns Follow Path → parent rep to the same object (world matrix kept) so she rides
+    the path without duplicating the empty's constraints onto the armature.
     """
     other_originals = [o for o in orig_to_rep if o != orig]
     to_remove = [c for c in rep.constraints if getattr(c, "target", None) in other_originals]
@@ -633,9 +636,29 @@ def run_mig_obj_const(orig, rep, orig_to_rep):
     while len(rep.constraints) > len(orig.constraints):
         rep.constraints.remove(rep.constraints[-1])
 
+    parented = None
+    if orig.parent is not None:
+        new_parent = _retarget_id(orig.parent, orig, rep, orig_to_rep)
+        rep.parent = new_parent
+        rep.parent_type = orig.parent_type
+        rep.parent_bone = orig.parent_bone
+        # Match orig's offset under the path/cart empty (not world snap from rest pose).
+        try:
+            rep.matrix_parent_inverse = orig.matrix_parent_inverse.copy()
+        except Exception:
+            pass
+        try:
+            rep.matrix_basis = orig.matrix_basis.copy()
+        except Exception:
+            rep.location = orig.location.copy()
+            rep.rotation_euler = orig.rotation_euler.copy()
+            rep.scale = orig.scale.copy()
+        parented = new_parent.name if new_parent else None
+
     print(
         f"[DLM MigObjConst] {orig.name!r}->{rep.name!r}: "
         f"{len(orig.constraints)} object constraint(s)"
+        + (f", parent={parented!r}" if parented else "")
     )
 
 

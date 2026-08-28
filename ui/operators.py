@@ -339,7 +339,8 @@ class DLM_OT_migrator_object_constraints(Operator):
     bl_label = "MigObjConst"
     bl_description = (
         "Migrate armature object constraints (Follow Path, Copy Location, etc.) "
-        "from original to replacement"
+        "and path parenting (e.g. character parented to a cart empty) from original "
+        "to replacement"
     )
     bl_icon = "CONSTRAINT"
     bl_options = {"REGISTER", "UNDO"}
