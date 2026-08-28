@@ -614,14 +614,10 @@ def _copy_constraint_props(c, nc, orig, rep, orig_to_rep):
 
 
 def run_mig_obj_const(orig, rep, orig_to_rep):
-    """Object constraints + path parenting: copy armature object constraints; mirror parent.
+    """Object constraints only: copy Follow Path / Copy Location / etc. on the armature.
 
-    Dennis-style: Follow Path / Copy Location live on the armature → copied 1:1 (names
-    preserved for MigNLA fcurves like offset_factor / influence).
-
-    Regina-style: armature has no object constraints but is parented to a cart/empty that
-    owns Follow Path → parent rep to the same object (world matrix kept) so she rides
-    the path without duplicating the empty's constraints onto the armature.
+    Constraint names are preserved so MigNLA fcurves (offset_factor, influence) keep binding.
+    Parent / path-empty relations are MigObjRelatives.
     """
     other_originals = [o for o in orig_to_rep if o != orig]
     to_remove = [c for c in rep.constraints if getattr(c, "target", None) in other_originals]
@@ -636,30 +632,90 @@ def run_mig_obj_const(orig, rep, orig_to_rep):
     while len(rep.constraints) > len(orig.constraints):
         rep.constraints.remove(rep.constraints[-1])
 
-    parented = None
-    if orig.parent is not None:
-        new_parent = _retarget_id(orig.parent, orig, rep, orig_to_rep)
-        rep.parent = new_parent
-        rep.parent_type = orig.parent_type
-        rep.parent_bone = orig.parent_bone
-        # Match orig's offset under the path/cart empty (not world snap from rest pose).
+    print(
+        f"[DLM MigObjConst] {orig.name!r}->{rep.name!r}: "
+        f"{len(orig.constraints)} object constraint(s)"
+    )
+
+
+def resolve_migration_pair(orig, rep, scene=None):
+    """Resolve orig/rep armatures; consolidate ghost duplicates onto canonical override."""
+    from ..utils.remap_usages import consolidate_migration_armature, resolve_migration_armature
+
+    scene = scene or bpy.context.scene
+    if rep is not None:
+        ghost = rep
+        rep = resolve_migration_armature(rep, scene)
+        if ghost != rep:
+            rep = consolidate_migration_armature(ghost, rep, scene)
+    return orig, rep
+
+
+def run_mig_obj_relatives(orig, rep, orig_to_rep, scene=None):
+    """Object relatives: copy armature object parenting (e.g. ride cart/path empty).
+
+    Preserves orig's world transform. Override armatures parented outside their
+    asset hierarchy (path cart, scene empty) use a Child Of constraint instead
+    of object parenting so override data survives save/reload.
+    """
+    from ..utils.remap_usages import object_in_collection_tree, override_root_collection
+
+    scene = scene or bpy.context.scene
+    _, rep = resolve_migration_pair(orig, rep, scene)
+
+    if orig.parent is None:
+        print(f"[DLM MigObjRelatives] {orig.name!r}->{rep.name!r}: no parent")
+        return rep
+
+    world_matrix = orig.matrix_world.copy()
+    new_parent = _retarget_id(orig.parent, orig, rep, orig_to_rep)
+    rep_root = override_root_collection(rep, scene)
+    use_child_of = (
+        rep_root is not None
+        and getattr(rep, "override_library", None) is not None
+        and not object_in_collection_tree(new_parent, rep_root)
+    )
+
+    if use_child_of:
+        if rep.parent is not None:
+            rep.parent = None
+        for c in list(rep.constraints):
+            if c.type == "CHILD_OF" and getattr(c, "target", None) == new_parent:
+                rep.constraints.remove(c)
+        nc = rep.constraints.new(type="CHILD_OF")
+        nc.target = new_parent
+        nc.name = orig.parent.name if orig.parent else "Child Of"
+        if orig.parent_type == "BONE" and orig.parent_bone:
+            nc.subtarget = orig.parent_bone
+        nc.influence = 1.0
+        # Rainys BST: inverse = target^-1, then restore world matrix.
+        nc.inverse_matrix = new_parent.matrix_world.inverted()
+        rep.matrix_world = world_matrix
+        print(
+            f"[DLM MigObjRelatives] {orig.name!r}->{rep.name!r}: "
+            f"Child Of {new_parent.name!r} (override-safe)"
+        )
+        return rep
+
+    rep.parent = new_parent
+    rep.parent_type = orig.parent_type
+    rep.parent_bone = orig.parent_bone
+    try:
+        rep.matrix_world = world_matrix
+    except Exception:
         try:
             rep.matrix_parent_inverse = orig.matrix_parent_inverse.copy()
-        except Exception:
-            pass
-        try:
             rep.matrix_basis = orig.matrix_basis.copy()
         except Exception:
             rep.location = orig.location.copy()
             rep.rotation_euler = orig.rotation_euler.copy()
             rep.scale = orig.scale.copy()
-        parented = new_parent.name if new_parent else None
 
     print(
-        f"[DLM MigObjConst] {orig.name!r}->{rep.name!r}: "
-        f"{len(orig.constraints)} object constraint(s)"
-        + (f", parent={parented!r}" if parented else "")
+        f"[DLM MigObjRelatives] {orig.name!r}->{rep.name!r}: "
+        f"parent={new_parent.name!r}"
     )
+    return rep
 
 
 def run_mig_bone_const(orig, rep, orig_to_rep):
@@ -711,14 +767,7 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
     mapping.update(collection_map)
     mapping[orig] = rep
 
-    # Replicate orig's parent on rep if it exists (keep world transform)
-    if orig.parent is not None:
-        world_matrix = rep.matrix_world.copy()
-        # If orig was parented to something that also remaps, use the mapped parent.
-        rep.parent = mapping.get(orig.parent, orig.parent)
-        rep.parent_type = orig.parent_type
-        rep.parent_bone = orig.parent_bone
-        rep.matrix_world = world_matrix
+    # Armature's own parent (cart/path empty) is MigObjRelatives — not duplicated here.
 
     mapped_srcs = set(mapping.keys())
     candidates = set(rep_descendants)
@@ -974,8 +1023,8 @@ def run_full_migration(context):
     """
     Run the full character migration for the single pair (manual or automatic).
 
-    Steps: CopyAttr, MigNLA, MigCustProps, MigObjConst, MigBoneConst,
-    RetargRelatives, MigBBodyShapeKeys.
+    Steps: CopyAttr, MigNLA, MigCustProps, MigObjConst, MigObjRelatives,
+    MigBoneConst, RetargRelatives, MigBBodyShapeKeys.
     Returns (True, message) on success, (False, error_message) on failure.
     """
     props = getattr(context.scene, "dynamic_link_manager", None)
@@ -986,6 +1035,10 @@ def run_full_migration(context):
     if orig == rep:
         return False, "Original and replacement must be different armatures."
 
+    orig, rep = resolve_migration_pair(orig, rep, context.scene)
+    if props and props.replacement_character != rep:
+        props.replacement_character = rep
+
     orig_to_rep = {orig: rep}
     rep_descendants = descendants(rep)
 
@@ -994,6 +1047,7 @@ def run_full_migration(context):
         run_mig_nla(orig, rep, context=context)
         run_mig_cust_props(orig, rep)
         run_mig_obj_const(orig, rep, orig_to_rep)
+        run_mig_obj_relatives(orig, rep, orig_to_rep, scene=context.scene)
         run_mig_bone_const(orig, rep, orig_to_rep)
         run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep)
         run_mig_bbody_shapekeys(orig, rep, rep_descendants, context)

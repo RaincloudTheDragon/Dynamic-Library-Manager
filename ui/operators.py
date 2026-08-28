@@ -259,13 +259,16 @@ class DLM_OT_relocate_single_library(Operator):
 
 def _get_migrator_pair(context):
     """Return (orig, rep) from scene props (manual or automatic). (None, None) if invalid."""
-    from ..ops.migrator import get_pair_manual, get_pair_automatic
+    from ..ops.migrator import get_pair_manual, get_pair_automatic, resolve_migration_pair
 
     props = getattr(context.scene, "dynamic_link_manager", None)
     if not props:
         return None, None
     use_auto = getattr(props, "migrator_mode", False)
     orig, rep = get_pair_automatic(context) if use_auto else get_pair_manual(context)
+    orig, rep = resolve_migration_pair(orig, rep, context.scene)
+    if rep is not None and props.replacement_character != rep:
+        props.replacement_character = rep
     return orig, rep
 
 
@@ -339,8 +342,7 @@ class DLM_OT_migrator_object_constraints(Operator):
     bl_label = "MigObjConst"
     bl_description = (
         "Migrate armature object constraints (Follow Path, Copy Location, etc.) "
-        "and path parenting (e.g. character parented to a cart empty) from original "
-        "to replacement"
+        "from original to replacement"
     )
     bl_icon = "CONSTRAINT"
     bl_options = {"REGISTER", "UNDO"}
@@ -356,6 +358,35 @@ class DLM_OT_migrator_object_constraints(Operator):
             orig_to_rep = {orig: rep}
             run_mig_obj_const(orig, rep, orig_to_rep)
             self.report({"INFO"}, "Object constraints done.")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_migrator_object_relatives(Operator):
+    bl_idname = "dlm.migrator_object_relatives"
+    bl_label = "MigObjRelatives"
+    bl_description = (
+        "Copy armature object parenting from original to replacement "
+        "(e.g. character parented to a cart/path empty)"
+    )
+    bl_icon = "OBJECT_ORIGIN"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_migrator_pair(context)
+        if not orig or not rep or orig == rep:
+            self.report({"ERROR"}, "No valid character pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_mig_obj_relatives
+
+            rep = run_mig_obj_relatives(orig, rep, {orig: rep}, context.scene)
+            props = context.scene.dynamic_link_manager
+            if rep is not None and props.replacement_character != rep:
+                props.replacement_character = rep
+            self.report({"INFO"}, "Object relatives done.")
             return {"FINISHED"}
         except Exception as e:
             self.report({"ERROR"}, str(e))
@@ -850,6 +881,7 @@ OPERATOR_CLASSES = [
     DLM_OT_migrator_migrate_nla,
     DLM_OT_migrator_custom_properties,
     DLM_OT_migrator_object_constraints,
+    DLM_OT_migrator_object_relatives,
     DLM_OT_migrator_bone_constraints,
     DLM_OT_migrator_retarget_relations,
     DLM_OT_migrator_basebody_shapekeys,

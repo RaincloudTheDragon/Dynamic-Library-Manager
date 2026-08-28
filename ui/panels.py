@@ -93,6 +93,8 @@ class DLM_PT_main_panel(Panel):
         row.operator("dlm.migrator_custom_properties", text="MigCustProps", icon="PROPERTIES")
         row = box.row(align=True)
         row.operator("dlm.migrator_object_constraints", text="MigObjConst", icon="CONSTRAINT")
+        row.operator("dlm.migrator_object_relatives", text="MigObjRelatives", icon="OBJECT_ORIGIN")
+        row = box.row(align=True)
         row.operator("dlm.migrator_bone_constraints", text="MigBoneConst", icon="CONSTRAINT_BONE")
         row.operator("dlm.migrator_retarget_relations", text="RetargRelatives", icon="ORIENTATION_PARENT")
 

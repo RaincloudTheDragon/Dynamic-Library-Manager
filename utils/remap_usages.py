@@ -80,6 +80,201 @@ def _deepest_users_collection(scene, ob):
     return max(colls, key=depth)
 
 
+def object_in_collection_tree(ob, coll):
+    """True if ob is coll itself or any object under coll (recursive)."""
+    if ob is None or coll is None:
+        return False
+    if ob == coll:
+        return True
+    return ob in _objects_in_collection_recursive(coll)
+
+
+def sibling_override_instances(orig, rep, scene=None):
+    """
+    True when orig and rep are separate override instances of the same linked asset.
+
+    Example: ``Regina`` and ``Regina.001`` both override the linked ``Regina``
+    collection from ``Regina_v4.5.blend``. Removing the orig override root with
+    ``collections.remove()`` destroys the shared override template and breaks the
+    rep instance on save/reload.
+    """
+    if orig is None or rep is None or orig == rep:
+        return False
+    scene = scene or bpy.context.scene
+    orig_root = override_root_collection(orig, scene)
+    rep_root = override_root_collection(rep, scene)
+    if orig_root is not None and rep_root is not None and orig_root == rep_root:
+        return False
+
+    def _coll_ref(coll):
+        ol = getattr(coll, "override_library", None) if coll else None
+        return getattr(ol, "reference", None) if ol else None
+
+    orig_cref = _coll_ref(orig_root)
+    rep_cref = _coll_ref(rep_root)
+    if orig_cref is not None and orig_cref == rep_cref:
+        return True
+
+    # Armature-level: same linked reference, different hierarchy roots.
+    orig_ol = getattr(orig, "override_library", None)
+    rep_ol = getattr(rep, "override_library", None)
+    if orig_ol and rep_ol:
+        oref = getattr(orig_ol, "reference", None)
+        rref = getattr(rep_ol, "reference", None)
+        if oref is not None and oref == rref:
+            oh = getattr(orig_ol, "hierarchy_root", None)
+            rh = getattr(rep_ol, "hierarchy_root", None)
+            if oh and rh and oh != rh:
+                return True
+
+    return False
+
+
+def needs_template_preserving_remove(orig, rep, coll, scene=None):
+    """
+    True when Remove Original must keep orig override datablocks for save/reload.
+
+    Detects sibling override instances even when orig's collection has already
+    lost ``override_library`` (e.g. after a prior broken save).
+    """
+    if sibling_override_instances(orig, rep, scene):
+        return True
+    if coll is None or rep is None:
+        return False
+    scene = scene or bpy.context.scene
+    rep_root = override_root_collection(rep, scene)
+    if rep_root is None:
+        return False
+    rep_ol = getattr(rep_root, "override_library", None)
+    if rep_ol is None:
+        return False
+    rep_ref = getattr(rep_ol, "reference", None)
+    if rep_ref is None:
+        return False
+    ref_name = getattr(rep_ref, "name", None)
+    if ref_name and coll.name == ref_name:
+        return True
+    if coll.name == _strip_dup_suffix(rep_root.name):
+        return True
+    return False
+
+
+def _override_asset_root_for_armature(ob, scene=None):
+    """Override asset root collection for an armature (hierarchy_root, users, or naming)."""
+    if ob is None:
+        return None
+    scene = scene or bpy.context.scene
+    ol = getattr(ob, "override_library", None)
+    if ol is not None:
+        hroot = getattr(ol, "hierarchy_root", None)
+        if hroot is not None:
+            coll = bpy.data.collections.get(hroot.name)
+            if coll is not None:
+                return coll
+    root = override_root_collection(ob, scene)
+    if root is not None:
+        return root
+    name = ob.name
+    if name.endswith("_Rigify.001"):
+        base = name[: -len("_Rigify.001")]
+        coll = bpy.data.collections.get(f"{base}.001")
+        if coll is not None:
+            return coll
+    if name.endswith("_Rigify"):
+        base = name[: -len("_Rigify")]
+        for suffix in (".001", ""):
+            coll = bpy.data.collections.get(f"{base}{suffix}")
+            if coll is not None and getattr(coll, "override_library", None) is not None:
+                return coll
+    return None
+
+
+def resolve_migration_armature(ob, scene=None):
+    """
+    Return the armature inside ob's override asset root.
+
+    Picked ``Name_Rigify.001`` is often a collectionless duplicate; the real
+    override armature is ``Name_Rigify`` inside ``Name.001``.
+    """
+    if ob is None or ob.type != "ARMATURE":
+        return ob
+    scene = scene or bpy.context.scene
+    root = _override_asset_root_for_armature(ob, scene)
+    if root is None:
+        return ob
+
+    arms = [x for x in _objects_in_collection_recursive(root) if x.type == "ARMATURE"]
+    if not arms:
+        return ob
+    if object_in_collection_tree(ob, root):
+        return ob
+    if len(arms) == 1:
+        return arms[0]
+
+    ob_ref = _override_reference(ob)
+    ob_base = _strip_dup_suffix(ob.name)
+    for arm in arms:
+        if ob_ref is not None and _override_reference(arm) == ob_ref:
+            return arm
+    for arm in arms:
+        if _strip_dup_suffix(arm.name) == ob_base:
+            return arm
+    return ob
+
+
+def consolidate_migration_armature(ghost, canonical, scene=None):
+    """
+    Move migrated data from a collectionless duplicate onto the canonical override
+    armature, remap scene refs, and delete the ghost.
+    """
+    if ghost is None or canonical is None or ghost == canonical:
+        return canonical
+
+    g_ad = getattr(ghost, "animation_data", None)
+    if g_ad and g_ad.action:
+        if canonical.animation_data is None:
+            canonical.animation_data_create()
+        if canonical.animation_data.action is None:
+            canonical.animation_data.action = g_ad.action
+
+    for c in list(ghost.constraints):
+        dup = any(
+            x.type == c.type and getattr(x, "target", None) == getattr(c, "target", None)
+            for x in canonical.constraints
+        )
+        if dup:
+            continue
+        nc = canonical.constraints.new(type=c.type)
+        nc.name = c.name
+        for prop in c.bl_rna.properties:
+            if prop.is_readonly or prop.identifier in ("name", "type"):
+                continue
+            if not hasattr(nc, prop.identifier):
+                continue
+            try:
+                setattr(nc, prop.identifier, getattr(c, prop.identifier))
+            except Exception:
+                pass
+
+    if ghost.parent and not canonical.parent and not any(
+        x.type == "CHILD_OF" for x in canonical.constraints
+    ):
+        canonical.parent = ghost.parent
+        canonical.parent_type = ghost.parent_type
+        canonical.parent_bone = ghost.parent_bone
+        try:
+            canonical.matrix_world = ghost.matrix_world.copy()
+        except Exception:
+            pass
+
+    remap_object_usages(ghost, canonical)
+    try:
+        bpy.data.objects.remove(ghost, do_unlink=True)
+    except Exception:
+        pass
+    return canonical
+
+
 def override_root_collection(ob, scene=None):
     """
     Outermost override (or scene-root) collection containing ob.

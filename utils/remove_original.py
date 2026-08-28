@@ -300,14 +300,32 @@ def purge_unused_library(filepath):
         return False, leftovers
 
 
-def remove_unused_override_armatures(keep=None):
+def _template_keep_ids_for_collection(coll):
+    """IDs that must survive Remove Original when coll is kept as override template."""
+    keep = set()
+    if coll is None:
+        return keep
+    keep.add(coll)
+    for ob in _all_objects_in_collection(coll):
+        keep.add(ob)
+        data = getattr(ob, "data", None)
+        if data is not None:
+            keep.add(data)
+    return keep
+
+
+def remove_unused_override_armatures(keep=None, keep_ids=None):
     """
     Remove armature library-overrides that are not in any scene (ghost leftovers like Steve).
-    Returns list of (name, library_paths) for each removed armature.
+
+    keep_ids: extra object pointers that must not be removed (override template armatures).
     """
     removed = []
+    protected = {k for k in (keep_ids or ()) if k is not None}
+    if keep is not None:
+        protected.add(keep)
     for ob in list(bpy.data.objects):
-        if ob.type != "ARMATURE" or ob is keep:
+        if ob.type != "ARMATURE" or ob in protected:
             continue
         if not getattr(ob, "override_library", None):
             continue
@@ -321,6 +339,64 @@ def remove_unused_override_armatures(keep=None):
         except Exception:
             pass
     return removed
+
+
+def _unlink_collection_from_parents(coll):
+    """Remove coll from every parent collection; keep the override datablock."""
+    if coll is None:
+        return
+    for pc in list(bpy.data.collections):
+        try:
+            if coll.name in pc.children:
+                pc.children.unlink(coll)
+        except Exception:
+            pass
+
+
+def _remove_orig_sibling_override_instance(orig, coll, report):
+    """
+    Hide the orig override instance from the scene without deleting any IDs.
+
+    Sibling overrides (Regina / Regina.001) share linked override templates.
+    Deleting orig override objects — or their datablocks — breaks the rep on
+    save/reload. Unlink the root collection and hide its objects instead.
+    """
+    from .remap_usages import object_in_collection_tree
+
+    coll_name = coll.name
+    _unlink_collection_from_parents(coll)
+    hidden = 0
+    for ob in _all_objects_in_collection(coll):
+        parent = ob.parent
+        if parent is not None and not object_in_collection_tree(parent, coll):
+            try:
+                ob.parent = None
+            except Exception:
+                pass
+        try:
+            ob.hide_viewport = True
+            ob.hide_render = True
+            hidden += 1
+        except Exception:
+            pass
+    if orig is not None and orig not in _all_objects_in_collection(coll):
+        if orig.parent is not None:
+            try:
+                orig.parent = None
+            except Exception:
+                pass
+        try:
+            orig.hide_viewport = True
+            orig.hide_render = True
+            hidden += 1
+        except Exception:
+            pass
+    if report:
+        report(
+            {"INFO"},
+            f"Unlinked original override instance: {coll_name} "
+            f"(kept {hidden} object(s) as override template)",
+        )
 
 
 def _all_objects_in_collection(coll):
@@ -593,12 +669,27 @@ def run_remove_original(context, orig, rep, report):
 
     report: Operator.report. Returns True on success, False if orig could not be deleted.
     """
-    from .remap_usages import remap_object_usages
+    from .remap_usages import (
+        build_override_collection_object_map,
+        consolidate_migration_armature,
+        needs_template_preserving_remove,
+        remap_object_usages,
+        remap_parents,
+        resolve_migration_armature,
+    )
 
     name = orig.name
     props = context.scene.dynamic_link_manager
     rig_family = getattr(props, "migrator_rig_family", "RIGIFY")
+    ghost = rep
+    rep = resolve_migration_armature(rep, context.scene)
+    if ghost is not None and rep is not None and ghost != rep:
+        rep = consolidate_migration_armature(ghost, rep, context.scene)
+    if props.replacement_character != rep:
+        props.replacement_character = rep
     coll = resolve_collection_for_remove_original(orig, rig_family, context.scene, rep)
+    soft_remove = needs_template_preserving_remove(orig, rep, coll, context.scene)
+    template_keep = _template_keep_ids_for_collection(coll) if soft_remove else set()
 
     # Libraries + IDs that must die with orig (capture before pointers are invalidated).
     orig_lib_paths = set(collect_id_library_paths(orig))
@@ -608,12 +699,25 @@ def run_remove_original(context, orig, rep, report):
         if data is not None:
             orig_lib_paths |= collect_id_library_paths(data)
     orphan_entries = snapshot_ids_for_remove_original(orig, coll, rep, orig_lib_paths)
-    keep_ids = {rep, getattr(rep, "data", None)} if rep is not None else set()
+    keep_ids = set()
+    if rep is not None:
+        keep_ids.add(rep)
+        if getattr(rep, "data", None) is not None:
+            keep_ids.add(rep.data)
+        from .remap_usages import override_root_collection
+
+        rep_root = override_root_collection(rep, context.scene)
+        if rep_root is not None:
+            for ob in _all_objects_in_collection(rep_root):
+                keep_ids.add(ob)
+                data = getattr(ob, "data", None)
+                if data is not None:
+                    keep_ids.add(data)
+    if soft_remove and coll is not None:
+        keep_ids |= template_keep
 
     # Final sweep: remap remaining scene refs off orig (+ GEO/Jiffy in its override).
     if rep is not None and orig != rep:
-        from .remap_usages import build_override_collection_object_map, remap_parents
-
         mapping = build_override_collection_object_map(orig, rep)
         mapping[orig] = rep
         # Parents first — deleting orig otherwise clears them (e.g. RIG-Pallet-Jack).
@@ -646,18 +750,65 @@ def run_remove_original(context, orig, rep, report):
     try:
         if coll:
             coll_name = coll.name
+            # Snapshot objects in the remove tree before unlink — collection.remove can
+            # leave armatures alive (mesh users / external parent like a path cart) with
+            # empty users_collection (Outliner shows them under the parent only).
+            doomed = set(_all_objects_in_collection(coll))
+            if orig is not None:
+                doomed.add(orig)
+            # Never delete IDs still owned by the replacement hierarchy (shared WGTS,
+            # etc.). Wiping those corrupts the rep override and triggers a clean
+            # resync on save/reload (rest-pose armature, animated orphan leftover).
+            keep = set()
+            if rep is not None:
+                keep.add(rep)
+                rep_data = getattr(rep, "data", None)
+                if rep_data is not None:
+                    keep.add(rep_data)
+                from .remap_usages import override_root_collection
+
+                rep_root = override_root_collection(rep, context.scene)
+                if rep_root is not None:
+                    keep |= _all_objects_in_collection(rep_root)
+                for ob in list(keep):
+                    data = getattr(ob, "data", None)
+                    if data is not None:
+                        keep.add(data)
+            doomed -= keep
+
             context.scene.dynamic_link_manager.original_character = None
-            try:
-                bpy.data.collections.remove(coll)
-                report({"INFO"}, f"Removed collection: {coll_name}")
-            except Exception as remove_err:
-                report({"WARNING"}, f"Collection {coll_name} removal issue: {remove_err}")
+            if soft_remove:
+                _remove_orig_sibling_override_instance(orig, coll, report)
+            else:
                 try:
-                    bpy.data.objects.remove(orig, do_unlink=True)
-                    report({"INFO"}, f"Removed original object: {name}")
-                except Exception as e2:
-                    report({"ERROR"}, f"Could not remove original after collection failure: {e2}")
-                    return False
+                    bpy.data.collections.remove(coll)
+                    report({"INFO"}, f"Removed collection: {coll_name}")
+                except Exception as remove_err:
+                    report({"WARNING"}, f"Collection {coll_name} removal issue: {remove_err}")
+                    try:
+                        bpy.data.objects.remove(orig, do_unlink=True)
+                        report({"INFO"}, f"Removed original object: {name}")
+                    except Exception as e2:
+                        report({"ERROR"}, f"Could not remove original after collection failure: {e2}")
+                        return False
+                # Finish off exclusive survivors (collectionless but still parented / mesh-used).
+                removed_extra = 0
+                for ob in list(doomed):
+                    if ob is None:
+                        continue
+                    try:
+                        if ob in keep or ob == rep:
+                            continue
+                        _ = ob.name  # raises ReferenceError if already freed
+                    except ReferenceError:
+                        continue
+                    try:
+                        bpy.data.objects.remove(ob, do_unlink=True)
+                        removed_extra += 1
+                    except Exception:
+                        pass
+                if removed_extra:
+                    report({"INFO"}, f"Removed {removed_extra} leftover object(s) from original tree")
         else:
             bpy.data.objects.remove(orig, do_unlink=True)
             context.scene.dynamic_link_manager.original_character = None
@@ -672,7 +823,7 @@ def run_remove_original(context, orig, rep, report):
 
     # Ghost override armatures not in any scene (e.g. leftover Steve after character swap).
     ghost_libs = set()
-    for gname, paths in remove_unused_override_armatures(keep=rep):
+    for gname, paths in remove_unused_override_armatures(keep=rep, keep_ids=template_keep):
         ghost_libs.update(paths)
         report({"INFO"}, f"Removed unused override armature: {gname}")
 
@@ -688,7 +839,12 @@ def run_remove_original(context, orig, rep, report):
             report({"WARNING"}, f"Library still in use ({lib_label}): {preview}{extra}")
 
     # Library unlink can localize armature/mesh data with fake users; drop those orphans.
-    purged = purge_snapshotted_orphan_ids(orphan_entries, keep_ids, report=report)
+    if soft_remove:
+        if report:
+            report({"INFO"}, "Skipped orphan purge (override template preserved)")
+        purged = []
+    else:
+        purged = purge_snapshotted_orphan_ids(orphan_entries, keep_ids, report=report)
     if purged:
         preview = ", ".join(purged[:12])
         extra = f" (+{len(purged) - 12} more)" if len(purged) > 12 else ""
