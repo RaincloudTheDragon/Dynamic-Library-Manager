@@ -166,18 +166,23 @@ def resolve_ssh_host(unc_server: str, preferred: str = "") -> str | None:
 
 def discover_posix_root(host: str, unc_share: str, rel_under_share: str) -> str | None:
     """
-    Find POSIX directory that corresponds to *unc_share* by locating
-    *rel_under_share* under likely mount points (fast probes, then shallow find).
+    Find POSIX directory that corresponds to *unc_share*.
+
+    Prefers locating *rel_under_share* when that file exists on the server.
+    For missing archaic libs (the usual Symlink Propagation case), falls back to
+    matching the share mount and any existing parent directory of *rel*.
     """
     rel_posix = rel_under_share.replace("\\", "/").lstrip("/")
-    if not rel_posix:
-        return None
-    rel_q = rel_posix.replace("'", "'\\''")
-    # Share leaf name often appears in the mount path (e.g. amazon).
     share_leaf = unc_share.rstrip("\\").split("\\")[-1].replace("'", "'\\''")
-    server = unc_share.strip("\\").split("\\")[0].replace("'", "'\\''") if unc_share.startswith("\\\\") else ""
+    server = (
+        unc_share.strip("\\").split("\\")[0].replace("'", "'\\''")
+        if unc_share.startswith("\\\\")
+        else ""
+    )
+    rel_q = rel_posix.replace("'", "'\\''") if rel_posix else ""
 
     # Ordered candidate roots — no recursive find first.
+    # Include both amazon and assets PHOENIX layouts (NEXUS exposes multiple shares).
     remote = f"""
 rel='{rel_q}'
 share='{share_leaf}'
@@ -189,20 +194,53 @@ try_roots="
 /mnt/$(echo "$server" | tr '[:upper:]' '[:lower:]')/$share
 /mnt/PHOENIX/$share
 /mnt/PHOENIX/$share/$share
+/mnt/PHOENIX/amazon/$share
 /mnt/PHOENIX/amazon/amazon
 /mnt/PHOENIX/amazon/assets
 /export/$share
 /srv/$share
 /data/$share
 "
-for root in $try_roots; do
-  [ -n "$root" ] || continue
-  if [ -f "$root/$rel" ]; then echo "$root"; exit 0; fi
-done
-# Shallow scan for directories named like the share, then test file.
+# 1) Exact file under a candidate root (modern / still-present archaic).
+if [ -n "$rel" ]; then
+  for root in $try_roots; do
+    [ -n "$root" ] || continue
+    if [ -f "$root/$rel" ]; then echo "$root"; exit 0; fi
+  done
+fi
+# 2) Missing archaic file: accept root if the share mount exists and any parent
+#    of rel exists (or just the root for empty rel).
+if [ -n "$rel" ]; then
+  for root in $try_roots; do
+    [ -n "$root" ] || continue
+    [ -d "$root" ] || continue
+    # Walk parents of rel: a/b/c.blend → a/b → a → .
+    d="$rel"
+    while [ -n "$d" ]; do
+      d=$(dirname "$d")
+      [ "$d" = "." ] && break
+      if [ -d "$root/$d" ]; then echo "$root"; exit 0; fi
+    done
+    # First path segment (e.g. BlenderAssets) under this share.
+    first=$(echo "$rel" | cut -d/ -f1)
+    if [ -n "$first" ] && [ -d "$root/$first" ]; then echo "$root"; exit 0; fi
+  done
+fi
+# 3) Share-named directories under /mnt (even with no rel match).
 while IFS= read -r d; do
-  if [ -f "$d/$rel" ]; then echo "$d"; exit 0; fi
-  if [ -f "$d/$share/$rel" ]; then echo "$d/$share"; exit 0; fi
+  [ -d "$d" ] || continue
+  if [ -n "$rel" ] && [ -f "$d/$rel" ]; then echo "$d"; exit 0; fi
+  if [ -n "$rel" ]; then
+    first=$(echo "$rel" | cut -d/ -f1)
+    if [ -n "$first" ] && [ -d "$d/$first" ]; then echo "$d"; exit 0; fi
+    if [ -d "$d/$share" ]; then
+      if [ -z "$rel" ] || [ -d "$d/$share/$first" ] || [ -f "$d/$share/$rel" ]; then
+        echo "$d/$share"; exit 0
+      fi
+    fi
+  elif [ -d "$d" ]; then
+    echo "$d"; exit 0
+  fi
 done <<EOF
 $(find /mnt /export /srv /data -maxdepth 4 -type d -iname "$share" 2>/dev/null | head -40)
 EOF
@@ -232,14 +270,17 @@ def auto_discover_maps(
         "probes": [],
     }
 
-    # Prefer existing modern files as probes.
+    # Prefer existing modern files as probes; always keep UNC samples (archaic may be missing).
     probes = []
+    seen: set[str] = set()
     for p in sample_win_paths:
         p = norm_win(p)
-        if not p:
+        if not p or p.upper() in seen:
             continue
-        if os.path.isfile(p) or os.path.isdir(os.path.dirname(p)):
+        is_unc = p.startswith("\\\\")
+        if is_unc or os.path.isfile(p) or os.path.isdir(os.path.dirname(p) or p):
             probes.append(p)
+            seen.add(p.upper())
     if not probes:
         probes = [norm_win(p) for p in sample_win_paths if p]
 
@@ -248,8 +289,13 @@ def auto_discover_maps(
     for p in probes:
         unc = p if p.startswith("\\\\") else drive_letter_to_unc(p)
         if not unc:
-            result["probes"].append({"path": p, "error": "not UNC / unmapped drive"})
-            continue
+            # Still record bare UNC samples even when the archaic file is missing
+            # (dirname may also be missing on a dead share layout).
+            if p.startswith("\\\\"):
+                unc = p
+            else:
+                result["probes"].append({"path": p, "error": "not UNC / unmapped drive"})
+                continue
         parsed = unc_share_root(unc)
         if not parsed:
             result["probes"].append({"path": p, "error": "bad UNC"})
@@ -257,7 +303,7 @@ def auto_discover_maps(
         share, rel = parsed
         servers.add(share.split("\\")[2] if share.startswith("\\\\") else "")
         if rel and (share not in share_rels or len(rel) > len(share_rels[share])):
-            # Prefer a real file relative path for find.
+            # Prefer a real file relative path for find; keep missing archaic rels too.
             if os.path.isfile(p) or share not in share_rels:
                 share_rels[share] = rel
         result["probes"].append({"path": p, "unc": unc, "share": share, "rel": rel})
