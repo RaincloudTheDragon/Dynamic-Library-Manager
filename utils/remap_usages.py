@@ -89,6 +89,67 @@ def object_in_collection_tree(ob, coll):
     return ob in _objects_in_collection_recursive(coll)
 
 
+def _override_reference(idb):
+    """Linked source ID for a library override, or None."""
+    ol = getattr(idb, "override_library", None) if idb else None
+    return getattr(ol, "reference", None) if ol else None
+
+
+def _override_lib_filepath(idb):
+    """Library filepath backing an override (via reference.library), or None."""
+    ref = _override_reference(idb)
+    if ref is None:
+        return None
+    lib = getattr(ref, "library", None)
+    return getattr(lib, "filepath", None) if lib else None
+
+
+def is_library_override_id(idb):
+    """True if *idb* is a (local) library override."""
+    return idb is not None and getattr(idb, "override_library", None) is not None
+
+
+def collection_tree_has_overrides(coll):
+    """True if *coll* or any object under it is a library override."""
+    if coll is None:
+        return False
+    if is_library_override_id(coll):
+        return True
+    for ob in _objects_in_collection_recursive(coll):
+        if is_library_override_id(ob):
+            return True
+        data = getattr(ob, "data", None)
+        if is_library_override_id(data):
+            return True
+    return False
+
+
+def live_override_template_ids(exclude=None):
+    """
+    Linked IDs currently used as override_library.reference by any local override.
+
+    These are Blender's override templates — deleting them (or the last hierarchy
+    that owns them) triggers: \"Library override templates have been removed\".
+    """
+    exclude = {e for e in (exclude or ()) if e is not None}
+    out = set()
+    for coll_data in (
+        bpy.data.objects,
+        bpy.data.armatures,
+        bpy.data.meshes,
+        bpy.data.collections,
+    ):
+        for idb in coll_data:
+            if idb in exclude or getattr(idb, "library", None):
+                continue
+            if not is_library_override_id(idb):
+                continue
+            ref = _override_reference(idb)
+            if ref is not None:
+                out.add(ref)
+    return out
+
+
 def sibling_override_instances(orig, rep, scene=None):
     """
     True when orig and rep are separate override instances of the same linked asset.
@@ -106,25 +167,33 @@ def sibling_override_instances(orig, rep, scene=None):
     if orig_root is not None and rep_root is not None and orig_root == rep_root:
         return False
 
-    def _coll_ref(coll):
-        ol = getattr(coll, "override_library", None) if coll else None
-        return getattr(ol, "reference", None) if ol else None
-
-    orig_cref = _coll_ref(orig_root)
-    rep_cref = _coll_ref(rep_root)
+    orig_cref = _override_reference(orig_root)
+    rep_cref = _override_reference(rep_root)
     if orig_cref is not None and orig_cref == rep_cref:
         return True
 
     # Armature-level: same linked reference, different hierarchy roots.
-    orig_ol = getattr(orig, "override_library", None)
-    rep_ol = getattr(rep, "override_library", None)
-    if orig_ol and rep_ol:
-        oref = getattr(orig_ol, "reference", None)
-        rref = getattr(rep_ol, "reference", None)
-        if oref is not None and oref == rref:
-            oh = getattr(orig_ol, "hierarchy_root", None)
-            rh = getattr(rep_ol, "hierarchy_root", None)
-            if oh and rh and oh != rh:
+    oref = _override_reference(orig)
+    rref = _override_reference(rep)
+    if oref is not None and oref == rref:
+        orig_ol = getattr(orig, "override_library", None)
+        rep_ol = getattr(rep, "override_library", None)
+        oh = getattr(orig_ol, "hierarchy_root", None) if orig_ol else None
+        rh = getattr(rep_ol, "hierarchy_root", None) if rep_ol else None
+        if oh and rh and oh != rh:
+            return True
+        # Same linked armature reference even when hierarchy_root is missing/equal.
+        if oref == rref and orig != rep:
+            return True
+
+    # Same library file + matching base names (detection when refs already diverge).
+    op = _override_lib_filepath(orig) or _override_lib_filepath(orig_root)
+    rp = _override_lib_filepath(rep) or _override_lib_filepath(rep_root)
+    if op and rp and op == rp:
+        if _strip_dup_suffix(orig.name) == _strip_dup_suffix(rep.name):
+            return True
+        if orig_root and rep_root:
+            if _strip_dup_suffix(orig_root.name) == _strip_dup_suffix(rep_root.name):
                 return True
 
     return False
@@ -132,11 +201,16 @@ def sibling_override_instances(orig, rep, scene=None):
 
 def needs_template_preserving_remove(orig, rep, coll, scene=None):
     """
-    True when Remove Original must keep orig override datablocks for save/reload.
+    True when Remove Original must soft-unlink instead of deleting override IDs.
 
-    Detects sibling override instances even when orig's collection has already
-    lost ``override_library`` (e.g. after a prior broken save).
+    Any library-override orig (or override collection tree) must be preserved:
+    ``collections.remove()`` / deleting override datablocks destroys Blender's
+    shared override templates and breaks remaining instances on save/reload.
     """
+    if is_library_override_id(orig):
+        return True
+    if collection_tree_has_overrides(coll):
+        return True
     if sibling_override_instances(orig, rep, scene):
         return True
     if coll is None or rep is None:
@@ -145,10 +219,7 @@ def needs_template_preserving_remove(orig, rep, coll, scene=None):
     rep_root = override_root_collection(rep, scene)
     if rep_root is None:
         return False
-    rep_ol = getattr(rep_root, "override_library", None)
-    if rep_ol is None:
-        return False
-    rep_ref = getattr(rep_ol, "reference", None)
+    rep_ref = _override_reference(rep_root)
     if rep_ref is None:
         return False
     ref_name = getattr(rep_ref, "name", None)

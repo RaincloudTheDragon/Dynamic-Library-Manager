@@ -248,12 +248,37 @@ def find_library_holdouts(filepath):
 
 
 def _remove_unused_local_ids_for_library(filepath):
-    """Delete local (override) objects/collections of this library that are not in any scene."""
+    """Delete local (override) objects/collections of this library that are not in any scene.
+
+    Never deletes IDs that still serve as (or share) an override template for a
+    remaining override — soft-unlinked sibling instances must stay alive.
+    """
+    from .remap_usages import (
+        _override_reference,
+        is_library_override_id,
+        live_override_template_ids,
+    )
+
+    protected_refs = live_override_template_ids()
+    # Linked refs still pointed at by ANY local override (incl. in-scene rep).
+    live_refs = set(protected_refs)
+    for ob in bpy.data.objects:
+        if getattr(ob, "library", None) or not is_library_override_id(ob):
+            continue
+        ref = _override_reference(ob)
+        if ref is not None:
+            live_refs.add(ref)
+
     for ob in list(bpy.data.objects):
         if ob.users_scene or ob.library:
             continue
         if not _id_belongs_to_library(ob, filepath):
             continue
+        # Soft-hidden sibling: shares a template still used by a live override.
+        if is_library_override_id(ob):
+            ref = _override_reference(ob)
+            if ref is not None and ref in live_refs:
+                continue
         try:
             bpy.data.objects.remove(ob, do_unlink=True)
         except Exception:
@@ -263,6 +288,10 @@ def _remove_unused_local_ids_for_library(filepath):
             continue
         if not _id_belongs_to_library(coll, filepath):
             continue
+        if is_library_override_id(coll):
+            ref = _override_reference(coll)
+            if ref is not None and ref in live_refs:
+                continue
         # Skip if any remaining in-scene object lives in this collection.
         in_scene = False
         for ob in getattr(coll, "objects", []):
@@ -287,6 +316,21 @@ def purge_unused_library(filepath):
     scene_users = _scene_users_of_library(filepath)
     if scene_users:
         return False, scene_users
+    # Soft-unlinked override instances still pin the library as a template.
+    from .remap_usages import is_library_override_id
+
+    data_only = []
+    for ob in bpy.data.objects:
+        if ob.users_scene or ob.library:
+            continue
+        if not is_library_override_id(ob):
+            continue
+        if _id_belongs_to_library(ob, filepath) or _id_belongs_to_library(
+            getattr(ob, "data", None), filepath
+        ):
+            data_only.append(f"object:{ob.name} (override template, hidden)")
+    if data_only:
+        return False, data_only
     _remove_unused_local_ids_for_library(filepath)
     lib = _library_by_path(filepath)
     if lib is None:
@@ -319,17 +363,35 @@ def remove_unused_override_armatures(keep=None, keep_ids=None):
     Remove armature library-overrides that are not in any scene (ghost leftovers like Steve).
 
     keep_ids: extra object pointers that must not be removed (override template armatures).
+    Skips armatures that share an override.reference with any remaining override —
+    those are soft-hidden sibling templates, not ghosts.
     """
+    from .remap_usages import _override_reference, is_library_override_id
+
     removed = []
     protected = {k for k in (keep_ids or ()) if k is not None}
     if keep is not None:
         protected.add(keep)
+
+    live_refs = set()
+    for ob in bpy.data.objects:
+        if ob.library or not is_library_override_id(ob):
+            continue
+        if not ob.users_scene and ob not in protected:
+            continue
+        ref = _override_reference(ob)
+        if ref is not None:
+            live_refs.add(ref)
+
     for ob in list(bpy.data.objects):
         if ob.type != "ARMATURE" or ob in protected:
             continue
         if not getattr(ob, "override_library", None):
             continue
         if ob.users_scene:
+            continue
+        ref = _override_reference(ob)
+        if ref is not None and ref in live_refs:
             continue
         name = ob.name
         lib_paths = collect_id_library_paths(ob)
@@ -450,24 +512,25 @@ def _data_collection_for_kind(kind):
     return mapping.get(kind)
 
 
-def _add_id_and_override_refs(entries, idb):
-    """Record an ID and its override reference (linked source) for later orphan purge."""
+def _add_id_local_only(entries, idb):
+    """Record a local ID for orphan purge — never the linked override.reference template."""
+    if idb is None:
+        return
+    # Linked datablocks are override templates / library sources — never orphan-purge them.
+    if getattr(idb, "library", None) is not None:
+        return
     key = _rna_id_key(idb)
     if key:
         entries.add(key)
-    ol = getattr(idb, "override_library", None) if idb else None
-    ref = getattr(ol, "reference", None) if ol else None
-    ref_key = _rna_id_key(ref)
-    if ref_key:
-        entries.add(ref_key)
 
 
 def snapshot_ids_for_remove_original(orig, coll, rep, lib_paths):
     """
-    Names of IDs that should die with orig (objects in remove set + their .data +
-    override sources + any ID still belonging to orig's libraries).
+    Names of local IDs that should die with orig (objects in remove set + their .data).
 
-    Returns a set of (rna_type, name). Pointers are invalid after delete; look up by name.
+    Does **not** include linked ``override_library.reference`` IDs or other library
+    sources — those are Blender override templates. Library cleanup is handled only
+    by ``purge_unused_library`` after scene-user checks.
     """
     entries = set()
     objs = set()
@@ -487,25 +550,13 @@ def snapshot_ids_for_remove_original(orig, coll, rep, lib_paths):
     for ob in objs:
         if rep is not None and ob == rep:
             continue
-        _add_id_and_override_refs(entries, ob)
+        _add_id_local_only(entries, ob)
         data = getattr(ob, "data", None)
         if data is not None:
-            _add_id_and_override_refs(entries, data)
+            _add_id_local_only(entries, data)
 
     if coll is not None and (rep is None or not _collection_contains_object_recursive(coll, rep)):
-        _add_id_and_override_refs(entries, coll)
-
-    # Library-owned IDs (incl. indirect armature sources) so localization leftovers are caught.
-    for filepath in lib_paths or ():
-        for kind, coll_data in (
-            ("Object", bpy.data.objects),
-            ("Armature", bpy.data.armatures),
-            ("Mesh", bpy.data.meshes),
-            ("Collection", bpy.data.collections),
-        ):
-            for idb in coll_data:
-                if _id_belongs_to_library(idb, filepath):
-                    entries.add((kind, idb.name))
+        _add_id_local_only(entries, coll)
 
     # Never treat rep (or its armature data) as removable.
     if rep is not None:
@@ -530,11 +581,23 @@ def _id_used_by_in_scene_object(idb):
     return False
 
 
+def _id_is_live_override_template(idb):
+    """True if *idb* is linked or is still an override.reference for any local override."""
+    if idb is None:
+        return False
+    if getattr(idb, "library", None) is not None:
+        return True
+    from .remap_usages import live_override_template_ids
+
+    return idb in live_override_template_ids()
+
+
 def purge_snapshotted_orphan_ids(entries, keep_ids, report=None):
     """
     Clear fake users and delete snapshotted IDs that nothing in-scene still uses.
 
     keep_ids: set of live ID pointers (e.g. rep, rep.data) that must never be removed.
+    Never deletes linked IDs or live override templates.
     Returns list of \"Type:name\" removed.
     """
     if not entries:
@@ -556,9 +619,18 @@ def purge_snapshotted_orphan_ids(entries, keep_ids, report=None):
         idb = coll_data.get(name)
         if idb is None or idb in keep_ids:
             continue
+        # Name collision: local orig \"Kirk_Rigify\" deleted → get() may return the
+        # linked library namesake that rep still overrides. Never remove those.
+        if getattr(idb, "library", None) is not None:
+            continue
+        if _id_is_live_override_template(idb):
+            continue
         if _id_used_by_in_scene_object(idb):
             continue
         if kind == "Object" and getattr(idb, "users_scene", None):
+            continue
+        # Never orphan-purge remaining library overrides (soft-hidden templates).
+        if getattr(idb, "override_library", None) is not None:
             continue
 
         try:
@@ -587,6 +659,10 @@ def purge_snapshotted_orphan_ids(entries, keep_ids, report=None):
             continue
         idb = coll_data.get(name)
         if idb is None or idb in keep_ids:
+            continue
+        if _id_is_live_override_template(idb):
+            continue
+        if getattr(idb, "override_library", None) is not None:
             continue
         if _id_used_by_in_scene_object(idb):
             continue
@@ -689,6 +765,18 @@ def run_remove_original(context, orig, rep, report):
         props.replacement_character = rep
     coll = resolve_collection_for_remove_original(orig, rig_family, context.scene, rep)
     soft_remove = needs_template_preserving_remove(orig, rep, coll, context.scene)
+    # Belt: any override tree must soft-unlink — collections.remove destroys templates.
+    from .remap_usages import collection_tree_has_overrides, is_library_override_id
+
+    if not soft_remove and (
+        is_library_override_id(orig) or collection_tree_has_overrides(coll)
+    ):
+        soft_remove = True
+        if report:
+            report(
+                {"INFO"},
+                "Original is a library override — soft-unlinking to preserve templates",
+            )
     template_keep = _template_keep_ids_for_collection(coll) if soft_remove else set()
 
     # Libraries + IDs that must die with orig (capture before pointers are invalidated).
@@ -698,13 +786,53 @@ def run_remove_original(context, orig, rep, report):
         data = getattr(ob, "data", None)
         if data is not None:
             orig_lib_paths |= collect_id_library_paths(data)
+    # Never purge a library the replacement still overrides / links.
+    rep_lib_paths = set()
+    if rep is not None:
+        rep_lib_paths |= collect_id_library_paths(rep)
+        rep_data = getattr(rep, "data", None)
+        if rep_data is not None:
+            rep_lib_paths |= collect_id_library_paths(rep_data)
+        from .remap_usages import override_root_collection
+
+        rep_root_early = override_root_collection(rep, context.scene)
+        if rep_root_early is not None:
+            for ob in _all_objects_in_collection(rep_root_early):
+                rep_lib_paths |= collect_id_library_paths(ob)
+                data = getattr(ob, "data", None)
+                if data is not None:
+                    rep_lib_paths |= collect_id_library_paths(data)
+    rep_lib_norm = {_norm_lib_path(p) for p in rep_lib_paths if p}
+    if rep_lib_norm:
+        blocked = [p for p in orig_lib_paths if _norm_lib_path(p) in rep_lib_norm]
+        orig_lib_paths = {p for p in orig_lib_paths if _norm_lib_path(p) not in rep_lib_norm}
+        if blocked and report:
+            report(
+                {"INFO"},
+                f"Skipped purging {len(blocked)} librar(ies) still used by replacement",
+            )
+
     orphan_entries = snapshot_ids_for_remove_original(orig, coll, rep, orig_lib_paths)
     keep_ids = set()
     if rep is not None:
         keep_ids.add(rep)
         if getattr(rep, "data", None) is not None:
             keep_ids.add(rep.data)
-        from .remap_usages import override_root_collection
+        from .remap_usages import (
+            _override_reference,
+            live_override_template_ids,
+            override_root_collection,
+        )
+
+        # Protect linked templates by name — after local orig \"Kirk_Rigify\" is
+        # deleted, orphan lookup by name must not remove the linked namesake.
+        keep_ids |= live_override_template_ids()
+        ref = _override_reference(rep)
+        if ref is not None:
+            keep_ids.add(ref)
+            ref_data = getattr(ref, "data", None)
+            if ref_data is not None:
+                keep_ids.add(ref_data)
 
         rep_root = override_root_collection(rep, context.scene)
         if rep_root is not None:
@@ -713,6 +841,9 @@ def run_remove_original(context, orig, rep, report):
                 data = getattr(ob, "data", None)
                 if data is not None:
                     keep_ids.add(data)
+                oref = _override_reference(ob)
+                if oref is not None:
+                    keep_ids.add(oref)
     if soft_remove and coll is not None:
         keep_ids |= template_keep
 
@@ -780,39 +911,60 @@ def run_remove_original(context, orig, rep, report):
             if soft_remove:
                 _remove_orig_sibling_override_instance(orig, coll, report)
             else:
-                try:
-                    bpy.data.collections.remove(coll)
-                    report({"INFO"}, f"Removed collection: {coll_name}")
-                except Exception as remove_err:
-                    report({"WARNING"}, f"Collection {coll_name} removal issue: {remove_err}")
+                # Final guard: never collections.remove an override hierarchy.
+                if is_library_override_id(coll) or collection_tree_has_overrides(coll):
+                    _remove_orig_sibling_override_instance(orig, coll, report)
+                    soft_remove = True
+                else:
                     try:
-                        bpy.data.objects.remove(orig, do_unlink=True)
-                        report({"INFO"}, f"Removed original object: {name}")
-                    except Exception as e2:
-                        report({"ERROR"}, f"Could not remove original after collection failure: {e2}")
-                        return False
-                # Finish off exclusive survivors (collectionless but still parented / mesh-used).
-                removed_extra = 0
-                for ob in list(doomed):
-                    if ob is None:
-                        continue
-                    try:
-                        if ob in keep or ob == rep:
+                        bpy.data.collections.remove(coll)
+                        report({"INFO"}, f"Removed collection: {coll_name}")
+                    except Exception as remove_err:
+                        report({"WARNING"}, f"Collection {coll_name} removal issue: {remove_err}")
+                        try:
+                            bpy.data.objects.remove(orig, do_unlink=True)
+                            report({"INFO"}, f"Removed original object: {name}")
+                        except Exception as e2:
+                            report({"ERROR"}, f"Could not remove original after collection failure: {e2}")
+                            return False
+                    # Finish off exclusive survivors (collectionless but still parented / mesh-used).
+                    removed_extra = 0
+                    for ob in list(doomed):
+                        if ob is None:
                             continue
-                        _ = ob.name  # raises ReferenceError if already freed
-                    except ReferenceError:
-                        continue
-                    try:
-                        bpy.data.objects.remove(ob, do_unlink=True)
-                        removed_extra += 1
-                    except Exception:
-                        pass
-                if removed_extra:
-                    report({"INFO"}, f"Removed {removed_extra} leftover object(s) from original tree")
+                        try:
+                            if ob in keep or ob == rep:
+                                continue
+                            if is_library_override_id(ob):
+                                continue
+                            _ = ob.name  # raises ReferenceError if already freed
+                        except ReferenceError:
+                            continue
+                        try:
+                            bpy.data.objects.remove(ob, do_unlink=True)
+                            removed_extra += 1
+                        except Exception:
+                            pass
+                    if removed_extra:
+                        report({"INFO"}, f"Removed {removed_extra} leftover object(s) from original tree")
         else:
-            bpy.data.objects.remove(orig, do_unlink=True)
-            context.scene.dynamic_link_manager.original_character = None
-            report({"INFO"}, f"Removed original character: {name}")
+            # No collection — still never delete a library-override armature.
+            if is_library_override_id(orig):
+                try:
+                    orig.hide_viewport = True
+                    orig.hide_render = True
+                except Exception:
+                    pass
+                context.scene.dynamic_link_manager.original_character = None
+                soft_remove = True
+                report(
+                    {"INFO"},
+                    f"Hid original override armature: {name} (template preserved)",
+                )
+            else:
+                bpy.data.objects.remove(orig, do_unlink=True)
+                context.scene.dynamic_link_manager.original_character = None
+                report({"INFO"}, f"Removed original character: {name}")
     except Exception as e:
         report({"ERROR"}, f"Failed to remove original: {e}")
         return False
