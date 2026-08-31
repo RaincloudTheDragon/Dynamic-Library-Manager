@@ -388,7 +388,10 @@ def _collect_orig_actions(orig):
 
 
 def _keyed_channels_by_bone(orig):
-    """Map bone_name -> frozenset of keyed kinds: location / rotation / scale."""
+    """Map bone_name -> {kind: set(array_index)} for location / rotation / scale.
+
+    Partial keys matter: e.g. root.location X/Y keyed but Z static must still copy Z.
+    """
     keyed = {}
     for action in _collect_orig_actions(orig):
         for fc in _iter_action_fcurves(action):
@@ -405,91 +408,144 @@ def _keyed_channels_by_bone(orig):
                 kind = "scale"
             else:
                 continue
-            keyed.setdefault(bone, set()).add(kind)
+            keyed.setdefault(bone, {}).setdefault(kind, set()).add(int(getattr(fc, "array_index", 0) or 0))
     return keyed
 
 
-def _copy_pose_bone_channels(src, dst, skip=()):
-    """Copy local loc/rot/scale from src pose bone to dst, skipping keyed kinds."""
-    if "location" not in skip:
-        dst.location = src.location.copy()
-    if "scale" not in skip:
-        dst.scale = src.scale.copy()
-    if "rotation" not in skip:
+def _axis_count(kind, rotation_mode="QUATERNION"):
+    if kind in ("location", "scale"):
+        return 3
+    if rotation_mode == "QUATERNION":
+        return 4
+    if rotation_mode == "AXIS_ANGLE":
+        return 4
+    return 3
+
+
+def _copy_vector_unkeyed(src_vec, dst_vec, keyed_indices, n_axes):
+    """Copy per-axis values that are not in keyed_indices. Returns count copied."""
+    n = 0
+    keyed_indices = keyed_indices or set()
+    for i in range(n_axes):
+        if i in keyed_indices:
+            continue
+        dst_vec[i] = src_vec[i]
+        n += 1
+    return n
+
+
+def _copy_pose_bone_channels(src, dst, keyed_kinds=None):
+    """Copy local loc/rot/scale from src→dst for axes without keys.
+
+    keyed_kinds: {kind: set(array_index)} from ``_keyed_channels_by_bone``.
+    """
+    keyed_kinds = keyed_kinds or {}
+    n = 0
+    n += _copy_vector_unkeyed(
+        src.location, dst.location, keyed_kinds.get("location"), 3
+    )
+    n += _copy_vector_unkeyed(src.scale, dst.scale, keyed_kinds.get("scale"), 3)
+    rot_keyed = keyed_kinds.get("rotation")
+    # Match dst rotation mode to src before writing components.
+    if rot_keyed is None or len(rot_keyed) < _axis_count("rotation", src.rotation_mode):
         dst.rotation_mode = src.rotation_mode
-        if src.rotation_mode == "QUATERNION":
-            dst.rotation_quaternion = src.rotation_quaternion.copy()
-        elif src.rotation_mode == "AXIS_ANGLE":
-            dst.rotation_axis_angle = src.rotation_axis_angle[:]
-        else:
-            dst.rotation_euler = src.rotation_euler.copy()
+    if src.rotation_mode == "QUATERNION":
+        n += _copy_vector_unkeyed(
+            src.rotation_quaternion, dst.rotation_quaternion, rot_keyed, 4
+        )
+    elif src.rotation_mode == "AXIS_ANGLE":
+        n += _copy_vector_unkeyed(
+            src.rotation_axis_angle, dst.rotation_axis_angle, rot_keyed, 4
+        )
+    else:
+        n += _copy_vector_unkeyed(src.rotation_euler, dst.rotation_euler, rot_keyed, 3)
+    return n
 
 
 def _keyed_object_channels(obj):
-    """Set of keyed object transform kinds: location / rotation / scale."""
-    keyed = set()
+    """Map kind -> set(array_index) for object location / rotation / scale."""
+    keyed = {}
     for action in _collect_orig_actions(obj):
         for fc in _iter_action_fcurves(action):
             path = getattr(fc, "data_path", "") or ""
-            # Object channels are top-level (location, rotation_euler, scale).
             if path.startswith("pose.bones"):
                 continue
             base = path.split("[", 1)[0]
             if base == "location":
-                keyed.add("location")
+                kind = "location"
             elif base.startswith("rotation"):
-                keyed.add("rotation")
+                kind = "rotation"
             elif base == "scale":
-                keyed.add("scale")
+                kind = "scale"
+            else:
+                continue
+            keyed.setdefault(kind, set()).add(int(getattr(fc, "array_index", 0) or 0))
     return keyed
 
 
 def _copy_unkeyed_object_transform(orig, rep):
-    """Copy orig→rep object loc/rot/scale for channels without keys."""
+    """Copy orig→rep object loc/rot/scale for axes without keys."""
     if not orig or not rep:
         return 0
-    skip = _keyed_object_channels(orig)
+    keyed = _keyed_object_channels(orig)
     n = 0
-    if "location" not in skip:
-        rep.location = orig.location.copy()
-        n += 1
-    if "scale" not in skip:
-        rep.scale = orig.scale.copy()
-        n += 1
-    if "rotation" not in skip:
+    n += _copy_vector_unkeyed(orig.location, rep.location, keyed.get("location"), 3)
+    n += _copy_vector_unkeyed(orig.scale, rep.scale, keyed.get("scale"), 3)
+    rot_keyed = keyed.get("rotation")
+    if rot_keyed is None or len(rot_keyed) < _axis_count("rotation", orig.rotation_mode):
         rep.rotation_mode = orig.rotation_mode
-        if orig.rotation_mode == "QUATERNION":
-            rep.rotation_quaternion = orig.rotation_quaternion.copy()
-        elif orig.rotation_mode == "AXIS_ANGLE":
-            rep.rotation_axis_angle = orig.rotation_axis_angle[:]
-        else:
-            rep.rotation_euler = orig.rotation_euler.copy()
-        n += 1
-    print(f"[DLM MigNLA] copied unkeyed object channels={n} (skip={sorted(skip)})")
+    if orig.rotation_mode == "QUATERNION":
+        n += _copy_vector_unkeyed(
+            orig.rotation_quaternion, rep.rotation_quaternion, rot_keyed, 4
+        )
+    elif orig.rotation_mode == "AXIS_ANGLE":
+        n += _copy_vector_unkeyed(
+            orig.rotation_axis_angle, rep.rotation_axis_angle, rot_keyed, 4
+        )
+    else:
+        n += _copy_vector_unkeyed(orig.rotation_euler, rep.rotation_euler, rot_keyed, 3)
+    print(f"[DLM MigNLA] copied unkeyed object axes={n} (keyed={ {k: sorted(v) for k, v in keyed.items()} })")
     return n
 
 
 def _copy_unkeyed_pose(orig, rep):
-    """Copy orig→rep local pose for channels without keys (full pose if no action).
+    """Copy orig→rep local pose for axes without keys (full pose if no action).
 
-    Action'd bones keep their keyed channels; unkeyed bones (and unkeyed channels
-    on partially keyed bones) get the current pose from orig. No-op for non-armatures.
+    Action'd bones keep their keyed axes; unkeyed axes (e.g. root.location.z when
+    only X/Y are keyed) get the current pose from orig. No-op for non-armatures.
     """
     if not orig or not rep or not getattr(orig, "pose", None) or not getattr(rep, "pose", None):
         return 0
     keyed = _keyed_channels_by_bone(orig)
-    n = 0
+    n_bones = 0
+    n_axes = 0
     for pb in orig.pose.bones:
         rb = rep.pose.bones.get(pb.name)
         if rb is None:
             continue
-        skip = keyed.get(pb.name, set())
-        if skip >= {"location", "rotation", "scale"}:
+        bone_keyed = keyed.get(pb.name, {})
+        # Skip bone only if every transform axis is keyed.
+        fully = True
+        for kind, mode_axes in (
+            ("location", 3),
+            ("scale", 3),
+            ("rotation", _axis_count("rotation", pb.rotation_mode)),
+        ):
+            idxs = bone_keyed.get(kind)
+            if idxs is None or len(idxs) < mode_axes:
+                fully = False
+                break
+        if fully:
             continue
-        _copy_pose_bone_channels(pb, rb, skip=skip)
-        n += 1
-    print(f"[DLM MigNLA] copied unkeyed pose on {n} bone(s) (keyed bones={len(keyed)})")
-    return n
+        copied = _copy_pose_bone_channels(pb, rb, bone_keyed)
+        if copied:
+            n_bones += 1
+            n_axes += copied
+    print(
+        f"[DLM MigNLA] copied unkeyed pose on {n_bones} bone(s), {n_axes} axes "
+        f"(keyed bones={len(keyed)})"
+    )
+    return n_bones
 
 
 def _copy_unkeyed_transforms(orig, rep):
