@@ -127,14 +127,70 @@ def remove_native_symlink(archaic: str) -> tuple[bool, str]:
     else:
         archaic = (archaic or "").replace("\\", "/")
     if not os.path.lexists(archaic):
-        return True, "already gone"
+        pruned = prune_empty_parents(archaic)
+        extra = f"; pruned {len(pruned)} empty dir(s)" if pruned else ""
+        return True, "already gone" + extra
     if not is_reparse_or_link(archaic):
         return False, f"not a stub (refusing delete): {archaic}"
     try:
         os.unlink(archaic)
-        return True, "removed"
     except OSError as e:
         return False, str(e)
+    pruned = prune_empty_parents(archaic)
+    extra = f"; pruned {len(pruned)} empty dir(s)" if pruned else ""
+    return True, "removed" + extra
+
+
+def _is_prune_stop_dir(path: str) -> bool:
+    """True for drive roots, UNC share roots, and filesystem root — never prune these."""
+    if not path:
+        return True
+    if os.name == "nt":
+        p = norm(path).rstrip("\\")
+        if len(p) == 2 and p[1] == ":":
+            return True
+        if p.startswith("\\\\"):
+            parts = [x for x in p.split("\\") if x]
+            # \\server\share  (and nothing deeper)
+            if len(parts) <= 2:
+                return True
+        return False
+    p = path.rstrip("/") or "/"
+    return p == "/"
+
+
+def prune_empty_parents(file_path: str) -> list[str]:
+    """
+    Remove empty directories upward from *file_path*'s parent.
+
+    Stops at the first non-empty directory (siblings remain), or at a drive /
+    UNC share / filesystem root. Never deletes files — ``os.rmdir`` only.
+    """
+    removed: list[str] = []
+    if os.name == "nt":
+        cur = norm(os.path.dirname(norm(file_path or "")))
+    else:
+        cur = os.path.dirname((file_path or "").replace("\\", "/"))
+
+    while cur and not _is_prune_stop_dir(cur):
+        if not os.path.isdir(cur):
+            break
+        try:
+            # Fails (safely) when any sibling file/dir remains.
+            os.rmdir(cur)
+            removed.append(cur)
+        except OSError:
+            break
+        parent = os.path.dirname(cur.rstrip("\\/") if os.name == "nt" else cur.rstrip("/"))
+        if os.name == "nt":
+            parent = norm(parent) if parent else ""
+            if not parent or parent.upper() == cur.upper():
+                break
+        else:
+            if not parent or parent == cur:
+                break
+        cur = parent
+    return removed
 
 
 def _file_fingerprint(path: str) -> dict[str, Any] | None:
@@ -244,9 +300,11 @@ def remove_copy_stub(archaic: str, expected: dict[str, Any] | None) -> tuple[boo
         )
     try:
         os.unlink(archaic)
-        return True, "removed copy"
     except OSError as e:
         return False, str(e)
+    pruned = prune_empty_parents(archaic)
+    extra = f"; pruned {len(pruned)} empty dir(s)" if pruned else ""
+    return True, "removed copy" + extra
 
 
 def _hidden_run_kwargs() -> dict[str, Any]:
@@ -407,8 +465,24 @@ def remove_linux_ssh_symlinks_batch(
             remote_parts.append(
                 f"_dlm_rm() {{ "
                 f"aq={aq}; i={i}; "
-                f'if [ ! -e "$aq" ] && [ ! -L "$aq" ]; then echo "DLM_OK $i GONE"; return 0; fi; '
-                f'if [ -L "$aq" ]; then rm -f "$aq" && echo "DLM_OK $i" && return 0; fi; '
+                f"_dlm_prune() {{ "
+                f'd="$1"; n=0; '
+                f'while [ -n "$d" ] && [ "$d" != "/" ]; do '
+                f'rmdir "$d" 2>/dev/null || break; '
+                f"n=$((n+1)); "
+                f'nd=$(dirname "$d"); '
+                f'[ "$nd" = "$d" ] && break; '
+                f'd="$nd"; '
+                f"done; "
+                f'echo "$n"; '
+                f"}}; "
+                f'if [ ! -e "$aq" ] && [ ! -L "$aq" ]; then '
+                f'n=$(_dlm_prune "$(dirname "$aq")"); '
+                f'echo "DLM_OK $i GONE $n"; return 0; fi; '
+                f'if [ -L "$aq" ]; then '
+                f'rm -f "$aq" || {{ echo "DLM_FAIL $i rm failed"; return 1; }}; '
+                f'n=$(_dlm_prune "$(dirname "$aq")"); '
+                f'echo "DLM_OK $i $n"; return 0; fi; '
                 f'echo "DLM_FAIL $i not a symlink — refusing delete"; return 1; '
                 f"}}; _dlm_rm || status=1"
             )
@@ -424,17 +498,32 @@ def remove_linux_ssh_symlinks_batch(
         for line in (out or "").splitlines():
             line = line.strip()
             if line.startswith("DLM_OK "):
+                parts = line.split()
                 try:
-                    i = int(line.split()[1])
+                    i = int(parts[1])
                 except (IndexError, ValueError):
                     continue
-                results[i] = (True, "removed")
+                pruned_n = 0
+                # DLM_OK i [GONE] [n]
+                for tok in parts[2:]:
+                    if tok.isdigit():
+                        pruned_n = int(tok)
+                msg = "removed"
+                if "GONE" in parts:
+                    msg = "already gone"
+                if pruned_n:
+                    msg += f"; pruned {pruned_n} empty dir(s)"
+                results[i] = (True, msg)
                 seen.add(i)
-                if os.name == "nt" and is_reparse_or_link(norm(archaic_wins[i])):
-                    try:
-                        os.unlink(norm(archaic_wins[i]))
-                    except OSError:
-                        pass
+                # Client-side reparse leftover (Windows view of the SMB stub).
+                if os.name == "nt":
+                    aw = norm(archaic_wins[i])
+                    if is_reparse_or_link(aw):
+                        try:
+                            os.unlink(aw)
+                        except OSError:
+                            pass
+                    prune_empty_parents(aw)
             elif line.startswith("DLM_FAIL "):
                 parts = line.split(None, 2)
                 try:

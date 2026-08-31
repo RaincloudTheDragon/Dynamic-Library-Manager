@@ -143,9 +143,33 @@ def run_symlinker(
     return result
 
 
+def related_basenames(basename: str) -> list[str]:
+    """Exact basename plus *_baked / un-baked sibling names for search."""
+    if not basename:
+        return []
+    stem, ext = os.path.splitext(basename)
+    if ext.lower() != ".blend":
+        return [basename]
+    out = [basename]
+    low = stem.lower()
+    if low.endswith("_baked"):
+        sibling = stem[: -len("_baked")] + ext
+    else:
+        sibling = stem + "_baked" + ext
+    if sibling.lower() != basename.lower():
+        out.append(sibling)
+    return out
+
+
 def find_basenames(roots: list[str], basenames: set[str]) -> dict[str, list[str]]:
     """Walk roots for matching .blend basenames; skip directory names starting with '.'."""
-    wanted = {b.lower(): b for b in basenames if b}
+    # lower filename -> original request basenames that accept this hit (exact + baked sibling)
+    wanted: dict[str, list[str]] = {}
+    for b in basenames:
+        if not b:
+            continue
+        for rel in related_basenames(b):
+            wanted.setdefault(rel.lower(), []).append(b)
     hits: dict[str, list[str]] = {b: [] for b in basenames}
     for root in roots:
         if not root or not os.path.isdir(root):
@@ -156,29 +180,37 @@ def find_basenames(roots: list[str], basenames: set[str]) -> dict[str, list[str]
                 key = name.lower()
                 if key not in wanted:
                     continue
-                original = wanted[key]
                 full = os.path.normpath(os.path.join(dirpath, name))
-                if full not in hits[original]:
-                    hits[original].append(full)
+                for original in wanted[key]:
+                    if original in hits and full not in hits[original]:
+                        hits[original].append(full)
     return hits
 
 
-def rank_modern_hits(candidates: list[str]) -> list[str]:
-    """Prefer AssetArchive / non-nested hits over live or project-nested BlenderAssets."""
+def rank_modern_hits(candidates: list[str], *, want_basename: str = "") -> list[str]:
+    """Prefer exact basename, then AssetArchive / non-nested over live project trees."""
+
+    want = (want_basename or "").lower()
 
     def score(path: str) -> tuple:
         u = path.replace("/", "\\").upper()
+        base = os.path.basename(path).lower()
         # Higher is better.
         s = 0
+        if want and base == want:
+            s += 200
+        elif want:
+            # Related baked/unbaked sibling — keep visible but below exact.
+            s += 40
         if "\\0 ASSETARCHIVE\\" in u or u.endswith("\\0 ASSETARCHIVE") or "\\ASSETARCHIVE\\" in u:
             s += 100
+        if "CHARACTERS-BAKED" in u and ("_baked" in want or "characters-baked" in want):
+            s += 30
         # Nested project false tree: ...\\SomeProject\\1 BlenderAssets\\...
         if "\\1 BLENDERASSETS\\" in u:
-            # Live root ...\\1 Amazon...\\1 BlenderAssets\\ is OK-ish; nested under a project is worse.
             parts = u.split("\\")
             try:
                 i = parts.index("1 BLENDERASSETS")
-                # If something that looks like a shot/project folder precedes it, demote.
                 if i >= 1 and parts[i - 1] not in ("1 AMAZON_ACTIVE_PROJECTS", "AMAZON_ACTIVE_PROJECTS"):
                     s -= 50
             except ValueError:
@@ -696,13 +728,20 @@ class SymlinkPropagationApp(tk.Tk):
 
     def _apply_search_hits(self, hits: dict[str, list[str]], skipped: list[str] | None = None) -> None:
         for row in self.rows:
-            cands = rank_modern_hits(hits.get(row["basename"], []))
+            want = row["basename"]
+            cands = rank_modern_hits(hits.get(want, []), want_basename=want)
             row["candidates"] = cands
             if not row.get("modern_path"):
-                if len(cands) == 1:
+                exact = [c for c in cands if os.path.basename(c).lower() == want.lower()]
+                if len(exact) == 1:
+                    row["modern_path"] = exact[0]
+                elif len(exact) > 1:
+                    row["modern_path"] = exact[0]
+                elif len(cands) == 1:
                     row["modern_path"] = cands[0]
                 elif len(cands) > 1:
-                    row["modern_path"] = cands[0]  # best-ranked; override via Pick hit
+                    # Multiple related hits (e.g. unbaked + baked) — prefer exact-ranked top.
+                    row["modern_path"] = cands[0]
         self._refresh_tree()
         filled = sum(1 for r in self.rows if r.get("modern_path"))
         msg = f"Search done — {filled}/{len(self.rows)} modern paths set."
@@ -803,8 +842,8 @@ class SymlinkPropagationApp(tk.Tk):
         self.confirm_btn.pack_forget()
         self.action_btn.configure(text="Teardown stubs", command=self._teardown, state=tk.NORMAL)
         self._action_tip.text = (
-            "Remove temporary stubs created earlier. Symlink stubs only; copy stubs "
-            "only when the fingerprint still matches. Never deletes unmatched files."
+            "Remove temporary stubs created earlier. Symlink/copy stubs only when "
+            "verified; then prune empty parent folders (stops if siblings remain)."
         )
         self.status_var.set("Blender apply done. Click Teardown stubs to remove temporary links.")
 

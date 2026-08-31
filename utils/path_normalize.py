@@ -86,21 +86,32 @@ def library_links_armature(lib) -> bool:
     return False
 
 
+def library_is_baked_character_path(lib) -> bool:
+    """True if this library looks like a Characters-Baked / *_baked.blend asset."""
+    name = (getattr(lib, "name", "") or "").lower()
+    raw = (getattr(lib, "filepath", "") or "").replace("/", "\\").lower()
+    if "_baked" in name or "_baked" in os.path.basename(raw):
+        return True
+    if "characters-baked" in raw:
+        return True
+    return False
+
+
 def collect_missing_libraries() -> list[dict[str, Any]]:
     """
-    Missing libraries that link armatures (unique by absolute path).
+    Missing libraries that need Symlink Propagation (unique by absolute path).
 
-    Non-armature libs are skipped — remapping them after a normal load is enough
-    (meshes/materials/etc. do not drop pose-side data the way armatures do).
-    Prefer Atomic Remap for those; FMT for images; otherwise blendfile search /
-    File → External Data.
+    Includes:
+      - libs that link armatures (pose loss on missing load — Blender #143902)
+      - baked character libs (*_baked / Characters-Baked) even when no IDs loaded
+        (failed load often leaves an empty library entry that still must rempath)
 
-    Each entry: archaic_path, stored_path, basename, id_name, kind.
+    Other missing links: Atomic Remap / FMT / File → External Data.
     """
     out = []
     seen = set()
     for lib in bpy.data.libraries:
-        if not library_links_armature(lib):
+        if not (library_links_armature(lib) or library_is_baked_character_path(lib)):
             continue
         raw = getattr(lib, "filepath", "") or ""
         if not raw:
@@ -131,21 +142,22 @@ def apply_modern_paths(plan: list[dict[str, Any]], *, make_relative: bool = True
     """
     Rewrite library filepaths from archaic → modern (string only, no reload).
 
-    Matches by absolute archaic path, then basename / id_name fallback.
-    Writes blend-relative // paths when possible so we don't depend on a global
-    make_paths_relative pass picking the wrong sibling tree (e.g. live
-    BlenderAssets instead of AssetArchive).
+    Matches by absolute archaic path, stored path, then basename / id_name.
+    Writes blend-relative // paths when possible.
+
+    Important: do **not** skip merely because abspath(raw) resolves through a
+    stub symlink to the modern file — the stored filepath string can still be
+    archaic, and skipping leaves session stuck on stubs_ready (Continue loops).
     """
-    by_archaic = {
-        norm_path(p["archaic_path"]).upper(): p
-        for p in plan
-        if p.get("archaic_path") and p.get("modern_path")
-    }
+    by_archaic = {}
     by_basename = {}
     by_id = {}
     for p in plan:
         if not p.get("modern_path"):
             continue
+        for key in (p.get("archaic_path"), p.get("stored_path")):
+            if key:
+                by_archaic[norm_path(key).upper()] = p
         base = (p.get("basename") or os.path.basename(p.get("archaic_path") or "")).lower()
         if base and base not in by_basename:
             by_basename[base] = p
@@ -153,18 +165,23 @@ def apply_modern_paths(plan: list[dict[str, Any]], *, make_relative: bool = True
         if idn and idn not in by_id:
             by_id[idn] = p
 
-    stats = {"libraries": 0, "skipped_missing_modern": 0, "applied": []}
+    stats = {"libraries": 0, "skipped_missing_modern": 0, "already_modern": 0, "applied": []}
 
     for lib in bpy.data.libraries:
         raw = getattr(lib, "filepath", "") or ""
         if not raw:
             continue
-        archaic = abs_blend_path(raw)
-        pair = by_archaic.get(archaic.upper()) if archaic else None
+        raw_norm = norm_path(raw)
+        archaic_resolved = abs_blend_path(raw)
+        pair = by_archaic.get(raw_norm.upper())
+        if not pair and archaic_resolved:
+            pair = by_archaic.get(archaic_resolved.upper())
         if not pair:
             pair = by_id.get((lib.name or "").lower())
         if not pair:
-            pair = by_basename.get(os.path.basename(archaic).lower() if archaic else "")
+            pair = by_basename.get(os.path.basename(raw_norm).lower())
+        if not pair and archaic_resolved:
+            pair = by_basename.get(os.path.basename(archaic_resolved).lower())
         if not pair:
             continue
 
@@ -174,10 +191,17 @@ def apply_modern_paths(plan: list[dict[str, Any]], *, make_relative: bool = True
         if not os.path.isfile(modern):
             stats["skipped_missing_modern"] += 1
             continue
-        if norm_path(modern).upper() == archaic.upper():
-            continue
 
         new_fp = to_blend_relative(modern) if make_relative else norm_path(modern)
+        raw_u = raw_norm.replace("/", "\\").upper()
+        new_u = norm_path(new_fp).replace("/", "\\").upper()
+        modern_u = norm_path(modern).replace("/", "\\").upper()
+        # Skip only when the *stored* string is already the modern target.
+        # abspath may follow stubs to modern while raw is still the archaic UNC.
+        if raw_u == new_u or raw_u == modern_u:
+            stats["already_modern"] += 1
+            continue
+
         try:
             lib.filepath = new_fp
         except Exception:
@@ -304,6 +328,7 @@ def run_pending_symlink_apply() -> dict[str, Any]:
 
     stats = apply_modern_paths(plan, make_relative=do_relative)
     n = int(stats.get("libraries") or 0)
+    already = int(stats.get("already_modern") or 0)
     if n > 0:
         # Must persist: filepath edits alone often leave is_dirty=False.
         schedule_save_after_rempath()
@@ -314,6 +339,15 @@ def run_pending_symlink_apply() -> dict[str, Any]:
             applied=stats.get("applied") or [],
         )
         return {"ok": True, "remapped": n, "message": f"remapped={n}", "applied": stats.get("applied")}
+
+    if already > 0 and already >= len([p for p in plan if p.get("modern_path")]):
+        # Stored paths already modern (or rempath was a no-op) — don't leave Continue looping.
+        stub_handoff.set_session_status(
+            stub_handoff.STATUS_APPLY_DONE,
+            remapped_count=0,
+            message=f"already modern ({already}); nothing to rewrite",
+        )
+        return {"ok": True, "remapped": 0, "message": "already modern"}
 
     stub_handoff.set_session_status(
         stub_handoff.STATUS_STUBS_READY,
