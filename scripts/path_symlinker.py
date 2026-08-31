@@ -6,6 +6,9 @@ Stub modes:
   native    — local os.symlink / mklink (OK on local volumes only)
   linux_ssh — SSH + ln -s on the Linux SMB host (required for network shares;
               client-side reparse points are unreadable by Blender even with R2R)
+  copy      — dumb binary copy of modern → archaic (explicit catch-all; never an
+              auto fallback). Teardown only deletes if the file still matches the
+              fingerprint recorded at create time.
 
 Never uses mklink /H.
 
@@ -15,8 +18,10 @@ Exit codes: 0 all ok, 1 partial, 2 fatal.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from typing import Any
@@ -128,6 +133,118 @@ def remove_native_symlink(archaic: str) -> tuple[bool, str]:
     try:
         os.unlink(archaic)
         return True, "removed"
+    except OSError as e:
+        return False, str(e)
+
+
+def _file_fingerprint(path: str) -> dict[str, Any] | None:
+    """Size + SHA-256 of first 1 MiB (and full file if smaller)."""
+    if not os.path.isfile(path) or os.path.islink(path):
+        return None
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return None
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            chunk = f.read(1024 * 1024)
+            h.update(chunk)
+            if size <= 1024 * 1024:
+                # Full-file hash already in digest.
+                pass
+            else:
+                # Mix in tail so truncations/replacements are caught cheaply.
+                try:
+                    f.seek(max(0, size - 65536))
+                    h.update(f.read(65536))
+                except OSError:
+                    pass
+    except OSError:
+        return None
+    return {"size": size, "sha256_head": h.hexdigest()}
+
+
+def create_copy_stub(archaic: str, modern: str) -> tuple[bool, str, dict[str, Any] | None]:
+    """
+    Copy modern → archaic as a real file (no symlink).
+
+    Returns (ok, message, fingerprint_or_None). Refuses to clobber non-stub files.
+    """
+    if os.name == "nt":
+        archaic = norm(archaic)
+        modern = norm(modern)
+    else:
+        archaic = (archaic or "").replace("\\", "/")
+        modern = (modern or "").replace("\\", "/")
+
+    if not os.path.isfile(modern):
+        return False, f"modern missing: {modern}", None
+    if norm(archaic).upper() == norm(modern).upper():
+        return False, "archaic and modern are the same path (refusing copy)", None
+
+    parent = os.path.dirname(archaic)
+    if parent and not os.path.isdir(parent):
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError as e:
+            return False, f"mkdir failed: {e}", None
+
+    if os.path.lexists(archaic):
+        if is_reparse_or_link(archaic):
+            try:
+                os.unlink(archaic)
+            except OSError as e:
+                return False, f"could not remove existing stub link: {e}", None
+        elif os.path.isdir(archaic):
+            return False, f"refusing to clobber directory: {archaic}", None
+        elif os.path.isfile(archaic):
+            return False, f"refusing to clobber real file: {archaic}", None
+        else:
+            return False, f"refusing to clobber existing path: {archaic}", None
+
+    try:
+        shutil.copy2(modern, archaic)
+    except OSError as e:
+        return False, f"copy failed: {e}", None
+
+    fp = _file_fingerprint(archaic)
+    if not fp:
+        return False, "copy wrote but could not fingerprint (left in place)", None
+    return True, f"copy ({fp['size']} bytes)", fp
+
+
+def remove_copy_stub(archaic: str, expected: dict[str, Any] | None) -> tuple[bool, str]:
+    """
+    Delete a copy stub only when fingerprint still matches what create recorded.
+
+    Never deletes symlinks via this path; never deletes on fingerprint mismatch.
+    """
+    if os.name == "nt":
+        archaic = norm(archaic)
+    else:
+        archaic = (archaic or "").replace("\\", "/")
+
+    if not os.path.lexists(archaic):
+        return True, "already gone"
+    if is_reparse_or_link(archaic):
+        return False, f"path is a symlink, not a copy stub (refusing delete): {archaic}"
+    if os.path.isdir(archaic):
+        return False, f"refusing to delete directory: {archaic}"
+    if not expected or not expected.get("size") or not expected.get("sha256_head"):
+        return False, "no copy fingerprint in manifest — refusing delete (safe)"
+    fp = _file_fingerprint(archaic)
+    if not fp:
+        return False, f"could not fingerprint for verify: {archaic}"
+    if int(fp["size"]) != int(expected["size"]) or fp["sha256_head"] != expected["sha256_head"]:
+        return (
+            False,
+            "copy stub fingerprint mismatch — file changed or is not our copy; "
+            "refusing delete",
+        )
+    try:
+        os.unlink(archaic)
+        return True, "removed copy"
     except OSError as e:
         return False, str(e)
 
@@ -349,8 +466,11 @@ def resolve_stub_mode(pair: dict[str, Any], default_mode: str) -> str:
     mode = (pair.get("stub_mode") or default_mode or "auto").lower()
     if mode == "auto":
         archaic = pair.get("archaic_path") or ""
+        # Never auto-pick copy — that is an explicit catch-all only.
         return "linux_ssh" if is_network_path(archaic) else "native"
-    return mode
+    if mode in ("native", "linux_ssh", "copy"):
+        return mode
+    return "native"
 
 
 def merge_ssh(payload_ssh: dict[str, Any] | None) -> dict[str, Any]:
@@ -395,6 +515,21 @@ def run_create(
         work.append(entry)
         if mode == "linux_ssh":
             ssh_jobs.append((idx, archaic, modern))
+        elif mode == "copy":
+            ok, msg, fp = create_copy_stub(archaic, modern)
+            entry["message"] = msg
+            if ok:
+                created.append(entry)
+                man = {
+                    "archaic_path": archaic,
+                    "modern_path": modern,
+                    "stub_mode": "copy",
+                }
+                if fp:
+                    man["copy_fingerprint"] = fp
+                by_archaic[norm(archaic).upper()] = man
+            else:
+                failed.append(entry)
         else:
             ok, msg = create_native_symlink(archaic, modern)
             entry["message"] = msg
@@ -444,9 +579,11 @@ def run_teardown(
 
     for p in targets:
         archaic = p.get("archaic_path") or ""
+        key = norm(archaic).upper()
+        man = remaining.get(key) or {}
         mode = (
             p.get("stub_mode")
-            or remaining.get(norm(archaic).upper(), {}).get("stub_mode")
+            or man.get("stub_mode")
             or "auto"
         )
         if mode == "auto":
@@ -456,12 +593,20 @@ def run_teardown(
         work.append(entry)
         if mode == "linux_ssh":
             ssh_idxs.append(idx)
+        elif mode == "copy":
+            ok, msg = remove_copy_stub(archaic, man.get("copy_fingerprint"))
+            entry["message"] = msg
+            if ok:
+                removed.append(entry)
+                remaining.pop(key, None)
+            else:
+                failed.append(entry)
         else:
             ok, msg = remove_native_symlink(archaic)
             entry["message"] = msg
             if ok:
                 removed.append(entry)
-                remaining.pop(norm(archaic).upper(), None)
+                remaining.pop(key, None)
             else:
                 failed.append(entry)
 

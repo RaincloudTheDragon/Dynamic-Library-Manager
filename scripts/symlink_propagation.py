@@ -413,6 +413,15 @@ class SymlinkPropagationApp(tk.Tk):
         ttk.Radiobutton(mode_row, text="Native only", variable=self.stub_mode, value="native").pack(
             side=tk.LEFT
         )
+        rb_copy = ttk.Radiobutton(mode_row, text="Copy file", variable=self.stub_mode, value="copy")
+        rb_copy.pack(side=tk.LEFT, padx=8)
+        WidgetHoverTip(
+            rb_copy,
+            "Explicit catch-all: copy the modern .blend bytes to the archaic path "
+            "(works on SMB when symlinks fail). Never chosen by Auto.\n\n"
+            "Teardown deletes the copy only if size+hash still match what we wrote — "
+            "mismatch refuses delete.",
+        )
         host_row = ttk.Frame(ssh_frame)
         host_row.pack(fill=tk.X, padx=4, pady=2)
         ttk.Label(host_row, text="SSH host").pack(side=tk.LEFT)
@@ -794,7 +803,8 @@ class SymlinkPropagationApp(tk.Tk):
         self.confirm_btn.pack_forget()
         self.action_btn.configure(text="Teardown stubs", command=self._teardown, state=tk.NORMAL)
         self._action_tip.text = (
-            "Remove temporary stubs created earlier. Refuses to delete anything that is not a symlink."
+            "Remove temporary stubs created earlier. Symlink stubs only; copy stubs "
+            "only when the fingerprint still matches. Never deletes unmatched files."
         )
         self.status_var.set("Blender apply done. Click Teardown stubs to remove temporary links.")
 
@@ -811,11 +821,21 @@ class SymlinkPropagationApp(tk.Tk):
             ):
                 return
 
+        mode = self.stub_mode.get() or "auto"
+        if mode == "copy":
+            if not messagebox.askyesno(
+                "Copy stubs",
+                "This copies full .blend files to the archaic paths, then deletes "
+                "those copies on teardown if they still match what was written.\n\n"
+                "That is destructive — a mistake can overwrite or remove the wrong "
+                "file. Continue?",
+            ):
+                return
+
         self.status_var.set("Creating stubs…")
         self.action_btn.configure(state=tk.DISABLED)
         self.update_idletasks()
 
-        mode = self.stub_mode.get() or "auto"
         ssh = self._ssh_payload()
         if mode in ("auto", "linux_ssh") and not (ssh.get("unc_to_posix") or {}):
             # Discover before create when maps are empty.
