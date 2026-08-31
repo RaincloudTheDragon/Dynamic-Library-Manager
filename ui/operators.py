@@ -159,41 +159,71 @@ class DLM_OT_symlink_propagation(Operator):
             self.report({"ERROR"}, "Session has no pairs — finish Create stubs in the wizard.")
             return {"CANCELLED"}
 
+        ok_m, missing_m = path_normalize.validate_modern_present(plan)
+        if not ok_m:
+            preview = "; ".join(os.path.basename(m) for m in missing_m[:5])
+            self.report(
+                {"ERROR"},
+                f"{len(missing_m)} modern path(s) missing on disk (want AssetArchive etc.): {preview}",
+            )
+            return {"CANCELLED"}
+
         if self.do_revert:
             if not bpy.data.filepath:
                 self.report({"ERROR"}, "Save the blend before revert")
                 return {"CANCELLED"}
+            # revert_mainfile aborts the rest of this operator — apply in load_post.
+            stub_handoff.set_session_status(
+                stub_handoff.STATUS_STUBS_READY,
+                pending_apply=True,
+                pending_do_relative=bool(self.do_relative),
+            )
             try:
                 bpy.ops.wm.revert_mainfile(use_scripts=False)
             except Exception as e:
+                stub_handoff.set_session_status(
+                    stub_handoff.STATUS_STUBS_READY,
+                    pending_apply=False,
+                )
                 self.report({"ERROR"}, f"Revert failed: {e}")
                 return {"CANCELLED"}
-            session = stub_handoff.load_session() or session
-            plan = list((session or {}).get("pairs") or plan)
+            self.report(
+                {"INFO"},
+                "Reverting… armature libs rempath automatically after load. "
+                "Then return to the wizard for teardown.",
+            )
+            return {"FINISHED"}
 
-        ok, missing = path_normalize.validate_archaic_present(plan)
-        if not ok:
-            preview = "; ".join(os.path.basename(m) for m in missing[:5])
+        ok_a, missing_a = path_normalize.validate_archaic_present(plan)
+        if not ok_a:
+            preview = "; ".join(os.path.basename(m) for m in missing_a[:5])
             self.report(
                 {"ERROR"},
-                f"{len(missing)} archaic path(s) still missing — create stubs in the wizard: {preview}",
+                f"{len(missing_a)} archaic path(s) still missing — create stubs in the wizard: {preview}",
             )
             return {"CANCELLED"}
 
-        stats = path_normalize.apply_modern_paths(plan)
-        n = sum(stats.values())
-        if self.do_relative:
-            try:
-                path_normalize.make_paths_relative()
-            except Exception as e:
-                stub_handoff.set_session_status(stub_handoff.STATUS_APPLY_DONE)
-                self.report({"WARNING"}, f"Remapped {n} path(s); make_relative failed: {e}")
-                return {"FINISHED"}
+        stats = path_normalize.apply_modern_paths(plan, make_relative=bool(self.do_relative))
+        n = int(stats.get("libraries") or 0)
+        if n <= 0:
+            self.report(
+                {"ERROR"},
+                "Remapped 0 libraries — archaic paths did not match. Check wizard pairs.",
+            )
+            return {"CANCELLED"}
 
-        stub_handoff.set_session_status(stub_handoff.STATUS_APPLY_DONE)
+        # Library.filepath edits often leave is_dirty=False — force write to disk.
+        saved = path_normalize.save_mainfile_after_rempath()
+        stub_handoff.set_session_status(
+            stub_handoff.STATUS_APPLY_DONE,
+            remapped_count=n,
+            applied=stats.get("applied") or [],
+            message=f"remapped={n} saved={saved}",
+        )
         self.report(
             {"INFO"},
-            f"Remapped {n} path(s). Return to the wizard for teardown.",
+            f"Remapped {n} path(s){' and saved' if saved else ' (save failed — save manually!)'}. "
+            "Return to the wizard for teardown.",
         )
         return {"FINISHED"}
 

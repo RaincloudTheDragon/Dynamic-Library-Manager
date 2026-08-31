@@ -16,6 +16,7 @@ import bpy
 from .ui import CLASSES
 from .ui.properties import DynamicLinkManagerProperties
 from .ui.preferences import DynamicLinkManagerPreferences
+from .utils import handlers as dlm_handlers
 
 
 def register():
@@ -23,9 +24,11 @@ def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.dynamic_link_manager = bpy.props.PointerProperty(type=DynamicLinkManagerProperties)
+    dlm_handlers.register()
 
 
 def unregister():
+    dlm_handlers.unregister()
     del bpy.types.Scene.dynamic_link_manager
     for cls in reversed(CLASSES):
         try:

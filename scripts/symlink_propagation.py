@@ -163,6 +163,31 @@ def find_basenames(roots: list[str], basenames: set[str]) -> dict[str, list[str]
     return hits
 
 
+def rank_modern_hits(candidates: list[str]) -> list[str]:
+    """Prefer AssetArchive / non-nested hits over live or project-nested BlenderAssets."""
+
+    def score(path: str) -> tuple:
+        u = path.replace("/", "\\").upper()
+        # Higher is better.
+        s = 0
+        if "\\0 ASSETARCHIVE\\" in u or u.endswith("\\0 ASSETARCHIVE") or "\\ASSETARCHIVE\\" in u:
+            s += 100
+        # Nested project false tree: ...\\SomeProject\\1 BlenderAssets\\...
+        if "\\1 BLENDERASSETS\\" in u:
+            # Live root ...\\1 Amazon...\\1 BlenderAssets\\ is OK-ish; nested under a project is worse.
+            parts = u.split("\\")
+            try:
+                i = parts.index("1 BLENDERASSETS")
+                # If something that looks like a shot/project folder precedes it, demote.
+                if i >= 1 and parts[i - 1] not in ("1 AMAZON_ACTIVE_PROJECTS", "AMAZON_ACTIVE_PROJECTS"):
+                    s -= 50
+            except ValueError:
+                pass
+        return (s, -len(path))
+
+    return sorted(candidates, key=score, reverse=True)
+
+
 class TreeHoverTip:
     """Delayed tooltip for ttk.Treeview cells/headings (tk has no built-in hover menus)."""
 
@@ -662,13 +687,13 @@ class SymlinkPropagationApp(tk.Tk):
 
     def _apply_search_hits(self, hits: dict[str, list[str]], skipped: list[str] | None = None) -> None:
         for row in self.rows:
-            cands = hits.get(row["basename"], [])
+            cands = rank_modern_hits(hits.get(row["basename"], []))
             row["candidates"] = cands
             if not row.get("modern_path"):
                 if len(cands) == 1:
                     row["modern_path"] = cands[0]
                 elif len(cands) > 1:
-                    row["modern_path"] = cands[0]  # first; override via Pick hit
+                    row["modern_path"] = cands[0]  # best-ranked; override via Pick hit
         self._refresh_tree()
         filled = sum(1 for r in self.rows if r.get("modern_path"))
         msg = f"Search done — {filled}/{len(self.rows)} modern paths set."
@@ -863,7 +888,17 @@ class SymlinkPropagationApp(tk.Tk):
     def _confirm_apply_done(self) -> None:
         data = load_session(self.session_file)
         if data.get("status") != STATUS_APPLY_DONE:
-            if not messagebox.askyesno(
+            n = int(data.get("remapped_count") or 0)
+            if n <= 0:
+                if not messagebox.askyesno(
+                    "Confirm",
+                    "Blender has not reported a successful rempath yet "
+                    "(remapped_count=0).\n\n"
+                    "Teardown now will remove stubs while libraries may still "
+                    "point at archaic paths.\n\nProceed anyway?",
+                ):
+                    return
+            elif not messagebox.askyesno(
                 "Confirm",
                 "Session is not apply_done yet. Mark apply done and proceed to teardown?",
             ):
