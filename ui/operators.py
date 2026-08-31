@@ -268,7 +268,10 @@ class DLM_OT_migrator_copy_attributes(Operator):
 class DLM_OT_migrator_migrate_nla(Operator):
     bl_idname = "dlm.migrator_migrate_nla"
     bl_label = "MigNLA"
-    bl_description = "Migrate NLA tracks and strips from original to replacement character"
+    bl_description = (
+        "Migrate NLA/action from original to replacement; "
+        "also copy unkeyed pose (loc/rot/scale) orig→rep"
+    )
     bl_icon = "NLA"
     bl_options = {"REGISTER", "UNDO"}
 

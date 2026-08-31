@@ -6,11 +6,16 @@
 """Character migrator: migrate animation, constraints, relations from original to replacement armature."""
 
 from contextlib import contextmanager
+import re
 
 import bpy
 
 from ..utils import descendants, collection_containing_armature
 from ..utils.remap_usages import remap_object_usages
+from .fk_rotations import _iter_action_fcurves
+
+# pose.bones["Name"].location / rotation_* / scale
+_POSE_CHANNEL_RE = re.compile(r'^pose\.bones\["([^"]+)"\]\.(\w+)')
 
 
 def _first_view3d_area(context):
@@ -340,11 +345,96 @@ def _copy_action_slot(src_owner, dst_owner, dst_action, log_prefix="[DLM MigNLA]
         return False
 
 
+def _collect_orig_actions(orig):
+    """Active action + all NLA strip actions on orig (unique, ordered)."""
+    actions = []
+    seen = set()
+    ad = getattr(orig, "animation_data", None)
+    if not ad:
+        return actions
+    for action in [getattr(ad, "action", None)] + [
+        strip.action
+        for track in (ad.nla_tracks or [])
+        for strip in track.strips
+        if getattr(strip, "action", None)
+    ]:
+        if action is None or id(action) in seen:
+            continue
+        seen.add(id(action))
+        actions.append(action)
+    return actions
+
+
+def _keyed_channels_by_bone(orig):
+    """Map bone_name -> frozenset of keyed kinds: location / rotation / scale."""
+    keyed = {}
+    for action in _collect_orig_actions(orig):
+        for fc in _iter_action_fcurves(action):
+            path = getattr(fc, "data_path", "") or ""
+            m = _POSE_CHANNEL_RE.match(path)
+            if not m:
+                continue
+            bone, prop = m.group(1), m.group(2)
+            if prop == "location":
+                kind = "location"
+            elif prop.startswith("rotation"):
+                kind = "rotation"
+            elif prop == "scale":
+                kind = "scale"
+            else:
+                continue
+            keyed.setdefault(bone, set()).add(kind)
+    return keyed
+
+
+def _copy_pose_bone_channels(src, dst, skip=()):
+    """Copy local loc/rot/scale from src pose bone to dst, skipping keyed kinds."""
+    if "location" not in skip:
+        dst.location = src.location.copy()
+    if "scale" not in skip:
+        dst.scale = src.scale.copy()
+    if "rotation" not in skip:
+        dst.rotation_mode = src.rotation_mode
+        if src.rotation_mode == "QUATERNION":
+            dst.rotation_quaternion = src.rotation_quaternion.copy()
+        elif src.rotation_mode == "AXIS_ANGLE":
+            dst.rotation_axis_angle = src.rotation_axis_angle[:]
+        else:
+            dst.rotation_euler = src.rotation_euler.copy()
+
+
+def _copy_unkeyed_pose(orig, rep):
+    """Copy orig→rep local pose for channels without keys (full pose if no action).
+
+    Action'd bones keep their keyed channels; unkeyed bones (and unkeyed channels
+    on partially keyed bones) get the current pose from orig.
+    """
+    if not orig or not rep or not getattr(orig, "pose", None) or not getattr(rep, "pose", None):
+        return 0
+    keyed = _keyed_channels_by_bone(orig)
+    n = 0
+    for pb in orig.pose.bones:
+        rb = rep.pose.bones.get(pb.name)
+        if rb is None:
+            continue
+        skip = keyed.get(pb.name, set())
+        if skip >= {"location", "rotation", "scale"}:
+            continue
+        _copy_pose_bone_channels(pb, rb, skip=skip)
+        n += 1
+    print(f"[DLM MigNLA] copied unkeyed pose on {n} bone(s) (keyed bones={len(keyed)})")
+    return n
+
+
 def run_mig_nla(orig, rep, report=None, context=None):
     """Migrate NLA: copy tracks and strips to replacement; or mirror action slot when no NLA (MigNLA).
     Actions are duplicated so repchar has independent copies.
+    Always copies unkeyed pose (loc/rot/scale) from orig→rep, with or without an action.
     Pass context so Animation Layers mirroring runs with rep as active object."""
     if not orig.animation_data:
+        n = _copy_unkeyed_pose(orig, rep)
+        if report:
+            report({"INFO"}, f"No animation_data; copied unkeyed pose ({n} bones).")
         return
     ad = orig.animation_data
     has_nla = ad.nla_tracks and len(ad.nla_tracks) > 0
@@ -391,8 +481,15 @@ def run_mig_nla(orig, rep, report=None, context=None):
         with _rep_active_for_animlayers(context, rep):
             _mirror_als_turn_on(orig, rep)
             _activate_topmost_als(context, orig, rep)
+        n = _copy_unkeyed_pose(orig, rep)
         if report:
-            report({"INFO"}, "No NLA detected, active action (duplicated) and slot copied to Replacement Armature.")
+            if active_action:
+                report(
+                    {"INFO"},
+                    f"No NLA; action+slot copied; unkeyed pose on {n} bone(s).",
+                )
+            else:
+                report({"INFO"}, f"No NLA/action; copied unkeyed pose ({n} bones).")
         return
     if rep.animation_data is None:
         rep.animation_data_create()
@@ -475,14 +572,18 @@ def run_mig_nla(orig, rep, report=None, context=None):
     with _rep_active_for_animlayers(context, rep):
         _mirror_als_turn_on(orig, rep)
         _activate_topmost_als(context, orig, rep)
+    n = _copy_unkeyed_pose(orig, rep)
     if report:
         _debug_als_lookup(orig)
         has_als = _has_als_anywhere(orig)
         print(f"[DLM MigNLA] AnimLayers check: has_als={has_als}")
         if has_als:
-            report({"INFO"}, "NLA layers detected, Animation Layer attributes migrated to Replacement Armature.")
+            report(
+                {"INFO"},
+                f"NLA + Animation Layers migrated; unkeyed pose on {n} bone(s).",
+            )
         else:
-            report({"INFO"}, "NLA layers detected and migrated. No Animation Layers found.")
+            report({"INFO"}, f"NLA migrated; unkeyed pose on {n} bone(s).")
 
 
 EXCLUDE_PROPS = {"_RNA_UI", "rigify_type", "rigify_parameters"}
