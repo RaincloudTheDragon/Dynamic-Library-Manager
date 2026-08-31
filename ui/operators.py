@@ -50,44 +50,16 @@ class DLM_OT_make_paths_absolute(Operator):
 
 
 class DLM_OT_symlink_propagation(Operator):
-    """Launch Symlink Propagation wizard, or Continue (revert + apply) when stubs are ready."""
+    """Launch Symlink Propagation wizard (stubs). When stubs are ready, use Revert / Remap."""
 
     bl_idname = "dlm.symlink_propagation"
     bl_label = "Symlink Propagation"
     bl_description = (
-        "Stub + rempath missing libraries that contain armatures (pose data is lost if "
-        "those libs are missing on load). Other missing links: Atomic Remap (recommended), "
-        "FMT for images, or generic blendfile / External Data search"
+        "Stub missing armature libraries (pose data is lost if those libs are missing on load). "
+        "After stubs: Revert, verify hits, then Remap (no auto-save). "
+        "Other missing links: Atomic Remap / FMT / External Data search"
     )
-    bl_options = {"REGISTER", "UNDO"}
-
-    do_revert: BoolProperty(
-        name="Revert First",
-        description="Call File > Revert so libraries reload with stubs present",
-        default=True,
-    )
-    do_relative: BoolProperty(
-        name="Make Relative",
-        description="Run make_paths_relative after remapping",
-        default=True,
-    )
-
-    def invoke(self, context, event):
-        from ..utils import stub_handoff
-
-        session = stub_handoff.load_session()
-        status = (session or {}).get("status")
-        if status == stub_handoff.STATUS_STUBS_READY:
-            return context.window_manager.invoke_props_dialog(self, width=360)
-        return self.execute(context)
-
-    def draw(self, context):
-        layout = self.layout
-        layout.label(text="Continue: apply modern paths from wizard pairs")
-        layout.prop(self, "do_revert")
-        layout.prop(self, "do_relative")
-        if bpy.data.is_dirty:
-            layout.label(text="Blend is dirty — revert will discard unsaved edits", icon="ERROR")
+    bl_options = {"REGISTER"}
 
     def execute(self, context):
         from ..utils import path_normalize, stub_handoff
@@ -96,12 +68,17 @@ class DLM_OT_symlink_propagation(Operator):
         status = (session or {}).get("status")
 
         if status == stub_handoff.STATUS_STUBS_READY:
-            return self._continue_apply(context, session)
+            self.report(
+                {"INFO"},
+                "Stubs ready — use Revert, then Remap (Remap does not save).",
+            )
+            return {"FINISHED"}
 
         if status == stub_handoff.STATUS_APPLY_DONE:
             self.report(
                 {"INFO"},
-                "Apply already done — return to the wizard and click Teardown stubs.",
+                "Remap already done — return to the wizard and click Teardown stubs. "
+                "Save the blend yourself when paths look correct.",
             )
             return {"FINISHED"}
 
@@ -147,84 +124,145 @@ class DLM_OT_symlink_propagation(Operator):
         self.report(
             {"INFO"},
             f"Wizard opened with {len(missing)} missing armature library(ies). "
-            "After stubs are ready, click Symlink Propagation again to Continue.",
+            "After stubs: Revert → verify → Remap (no auto-save).",
         )
         return {"FINISHED"}
 
-    def _continue_apply(self, context, session):
+
+class DLM_OT_symlink_revert(Operator):
+    """File > Revert so libraries reload through current stubs. Does not rempath or save."""
+
+    bl_idname = "dlm.symlink_revert"
+    bl_label = "Revert"
+    bl_description = (
+        "Revert the blend so armature libs reload via stubs. "
+        "Does not Remap or save — swap bad stubs in the wizard and Revert again if needed"
+    )
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        from ..utils import stub_handoff
+
+        session = stub_handoff.load_session()
+        return bool(session) and session.get("status") == stub_handoff.STATUS_STUBS_READY
+
+    def invoke(self, context, event):
+        if bpy.data.is_dirty:
+            return context.window_manager.invoke_confirm(self, event)
+        return self.execute(context)
+
+    def execute(self, context):
+        from ..utils import stub_handoff
+
+        if not bpy.data.filepath:
+            self.report({"ERROR"}, "Save the blend before revert")
+            return {"CANCELLED"}
+
+        # Clear any legacy pending_apply so load_post does not auto-remap/save.
+        stub_handoff.set_session_status(
+            stub_handoff.STATUS_STUBS_READY,
+            pending_apply=False,
+            pending_do_relative=False,
+            message="reverted — verify stubs, then Remap",
+        )
+        try:
+            # use_scripts=True follows prefs / trusted paths. False forces the
+            # "automatic execution disabled" security popup on every Revert
+            # (e.g. Text 'Dennis_rig_ui.py').
+            bpy.ops.wm.revert_mainfile(use_scripts=True)
+        except Exception as e:
+            self.report({"ERROR"}, f"Revert failed: {e}")
+            return {"CANCELLED"}
+        self.report(
+            {"INFO"},
+            "Reverted. Check libs/outliner; swap stubs in the wizard if hits are wrong, "
+            "then Remap (Remap does not save).",
+        )
+        return {"FINISHED"}
+
+
+class DLM_OT_symlink_remap(Operator):
+    """Rewrite archaic library paths → modern. Does not save. Gated until stubs load cleanly."""
+
+    bl_idname = "dlm.symlink_remap"
+    bl_label = "Remap"
+    bl_description = (
+        "Rempath archaic → modern in memory only (no save). "
+        "Disabled only when in-scope (wizard) stubs/libs are missing or invalid — "
+        "other missing links are ignored. Fix stubs and Revert first; save manually when ready"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    make_relative: BoolProperty(
+        name="Make Relative",
+        description="Write blend-relative // paths when remapping",
+        default=True,
+    )
+
+    @classmethod
+    def poll(cls, context):
         from ..utils import path_normalize, stub_handoff
 
-        plan = list((session or {}).get("pairs") or [])
+        session = stub_handoff.load_session()
+        if not session or session.get("status") != stub_handoff.STATUS_STUBS_READY:
+            return False
+        plan = list(session.get("pairs") or [])
+        if not plan:
+            return False
+        ok, _ = path_normalize.remap_readiness(plan)
+        return ok
+
+    def execute(self, context):
+        from ..utils import path_normalize, stub_handoff
+
+        session = stub_handoff.load_session()
+        if not session or session.get("status") != stub_handoff.STATUS_STUBS_READY:
+            self.report({"ERROR"}, "No stubs_ready session — create stubs in the wizard first.")
+            return {"CANCELLED"}
+
+        plan = list(session.get("pairs") or [])
         if not plan:
             self.report({"ERROR"}, "Session has no pairs — finish Create stubs in the wizard.")
             return {"CANCELLED"}
 
-        ok_m, missing_m = path_normalize.validate_modern_present(plan)
-        if not ok_m:
-            preview = "; ".join(os.path.basename(m) for m in missing_m[:5])
+        ready, reason = path_normalize.remap_readiness(plan)
+        if not ready:
+            self.report({"ERROR"}, reason)
+            return {"CANCELLED"}
+
+        stats = path_normalize.apply_modern_paths(plan, make_relative=bool(self.make_relative))
+        n = int(stats.get("libraries") or 0)
+        already = int(stats.get("already_modern") or 0)
+        if n <= 0 and already <= 0:
             self.report(
                 {"ERROR"},
-                f"{len(missing_m)} modern path(s) missing on disk (want AssetArchive etc.): {preview}",
+                "Remapped 0 libraries — archaic paths did not match. Check wizard pairs / Revert.",
             )
             return {"CANCELLED"}
 
-        if self.do_revert:
-            if not bpy.data.filepath:
-                self.report({"ERROR"}, "Save the blend before revert")
-                return {"CANCELLED"}
-            # revert_mainfile aborts the rest of this operator — apply in load_post.
+        if n > 0:
             stub_handoff.set_session_status(
-                stub_handoff.STATUS_STUBS_READY,
-                pending_apply=True,
-                pending_do_relative=bool(self.do_relative),
+                stub_handoff.STATUS_APPLY_DONE,
+                remapped_count=n,
+                applied=stats.get("applied") or [],
+                message=f"remapped={n} (not saved)",
             )
-            try:
-                bpy.ops.wm.revert_mainfile(use_scripts=False)
-            except Exception as e:
-                stub_handoff.set_session_status(
-                    stub_handoff.STATUS_STUBS_READY,
-                    pending_apply=False,
-                )
-                self.report({"ERROR"}, f"Revert failed: {e}")
-                return {"CANCELLED"}
             self.report(
                 {"INFO"},
-                "Reverting… armature libs rempath automatically after load. "
-                "Then return to the wizard for teardown.",
+                f"Remapped {n} path(s) in memory — not saved. "
+                "Save manually when correct, then Teardown stubs in the wizard.",
             )
-            return {"FINISHED"}
-
-        ok_a, missing_a = path_normalize.validate_archaic_present(plan)
-        if not ok_a:
-            preview = "; ".join(os.path.basename(m) for m in missing_a[:5])
+        else:
+            stub_handoff.set_session_status(
+                stub_handoff.STATUS_APPLY_DONE,
+                remapped_count=0,
+                message=f"already modern ({already})",
+            )
             self.report(
-                {"ERROR"},
-                f"{len(missing_a)} archaic path(s) still missing — create stubs in the wizard: {preview}",
+                {"INFO"},
+                f"Paths already modern ({already}). Return to wizard for Teardown; save if needed.",
             )
-            return {"CANCELLED"}
-
-        stats = path_normalize.apply_modern_paths(plan, make_relative=bool(self.do_relative))
-        n = int(stats.get("libraries") or 0)
-        if n <= 0:
-            self.report(
-                {"ERROR"},
-                "Remapped 0 libraries — archaic paths did not match. Check wizard pairs.",
-            )
-            return {"CANCELLED"}
-
-        # Library.filepath edits often leave is_dirty=False — force write to disk.
-        saved = path_normalize.save_mainfile_after_rempath()
-        stub_handoff.set_session_status(
-            stub_handoff.STATUS_APPLY_DONE,
-            remapped_count=n,
-            applied=stats.get("applied") or [],
-            message=f"remapped={n} saved={saved}",
-        )
-        self.report(
-            {"INFO"},
-            f"Remapped {n} path(s){' and saved' if saved else ' (save failed — save manually!)'}. "
-            "Return to the wizard for teardown.",
-        )
         return {"FINISHED"}
 
 
@@ -1062,6 +1100,8 @@ OPERATOR_CLASSES = [
     DLM_OT_make_paths_relative,
     DLM_OT_make_paths_absolute,
     DLM_OT_symlink_propagation,
+    DLM_OT_symlink_revert,
+    DLM_OT_symlink_remap,
     DLM_OT_migrator_remove_original,
     DLM_OT_picker_original_character,
     DLM_OT_picker_replacement_character,

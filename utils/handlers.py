@@ -3,7 +3,10 @@
 # the Free Software Foundation; either version 3 of the License, or
 # (at your option) any later version.
 
-"""Blender app handlers for Symlink Propagation (post-revert apply)."""
+"""Blender app handlers for Symlink Propagation (legacy pending_apply after load).
+
+New flow: Revert and Remap are separate operators; Remap does not save.
+"""
 
 from __future__ import annotations
 

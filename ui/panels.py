@@ -26,13 +26,16 @@ class DLM_PT_main_panel(Panel):
         row.operator("dlm.make_paths_relative", text="Make Paths Relative", icon="FILE_PARENT")
         row.operator("dlm.make_paths_absolute", text="Make Paths Absolute", icon="FILE_FOLDER")
         row = layout.row()
-        # Label becomes Continue when session status is stubs_ready (operator handles both).
+        # When stubs are ready: Revert + Remap (no auto-save). Else launch wizard.
         from ..utils import stub_handoff
 
         session = stub_handoff.load_session()
         status = (session or {}).get("status")
-        btn = "Continue" if status == stub_handoff.STATUS_STUBS_READY else "Symlink Propagation"
-        row.operator("dlm.symlink_propagation", text=btn, icon="LINKED")
+        if status == stub_handoff.STATUS_STUBS_READY:
+            row.operator("dlm.symlink_revert", text="Revert", icon="FILE_REFRESH")
+            row.operator("dlm.symlink_remap", text="Remap", icon="FILE_TICK")
+        else:
+            row.operator("dlm.symlink_propagation", text="Symlink Propagation", icon="LINKED")
 
         # Character Migrator: core + situational fixes + tweak tools under one section
         section_icon = "DISCLOSURE_TRI_DOWN" if props.charmig_section_expanded else "DISCLOSURE_TRI_RIGHT"

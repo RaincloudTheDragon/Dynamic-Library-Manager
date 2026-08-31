@@ -182,25 +182,35 @@ def discover_posix_root(host: str, unc_share: str, rel_under_share: str) -> str 
     rel_q = rel_posix.replace("'", "'\\''") if rel_posix else ""
 
     # Ordered candidate roots — no recursive find first.
-    # Include both amazon and assets PHOENIX layouts (NEXUS exposes multiple shares).
+    # Dedicated share mounts (/mnt/PHOENIX/$share) must beat nested lookalikes
+    # like /mnt/PHOENIX/amazon/assets when the share is an empty stub volume.
     remote = f"""
 rel='{rel_q}'
 share='{share_leaf}'
 server='{server}'
+# Prefer the real SMB export path first (empty stub shares included).
+preferred_roots="
+/mnt/PHOENIX/$share
+/mnt/$share
+"
 try_roots="
+/mnt/PHOENIX/$share
 /mnt/$share
 /mnt/$share/$share
 /mnt/$server/$share
 /mnt/$(echo "$server" | tr '[:upper:]' '[:lower:]')/$share
-/mnt/PHOENIX/$share
 /mnt/PHOENIX/$share/$share
 /mnt/PHOENIX/amazon/$share
 /mnt/PHOENIX/amazon/amazon
-/mnt/PHOENIX/amazon/assets
 /export/$share
 /srv/$share
 /data/$share
 "
+# 0) Dedicated empty/stub share mount: use it even when rel does not exist yet.
+for root in $preferred_roots; do
+  [ -n "$root" ] || continue
+  if [ -d "$root" ]; then echo "$root"; exit 0; fi
+done
 # 1) Exact file under a candidate root (modern / still-present archaic).
 if [ -n "$rel" ]; then
   for root in $try_roots; do
@@ -208,20 +218,17 @@ if [ -n "$rel" ]; then
     if [ -f "$root/$rel" ]; then echo "$root"; exit 0; fi
   done
 fi
-# 2) Missing archaic file: accept root if the share mount exists and any parent
-#    of rel exists (or just the root for empty rel).
+# 2) Missing archaic file: accept root if any parent of rel exists under it.
 if [ -n "$rel" ]; then
   for root in $try_roots; do
     [ -n "$root" ] || continue
     [ -d "$root" ] || continue
-    # Walk parents of rel: a/b/c.blend → a/b → a → .
     d="$rel"
     while [ -n "$d" ]; do
       d=$(dirname "$d")
       [ "$d" = "." ] && break
       if [ -d "$root/$d" ]; then echo "$root"; exit 0; fi
     done
-    # First path segment (e.g. BlenderAssets) under this share.
     first=$(echo "$rel" | cut -d/ -f1)
     if [ -n "$first" ] && [ -d "$root/$first" ]; then echo "$root"; exit 0; fi
   done
@@ -229,6 +236,10 @@ fi
 # 3) Share-named directories under /mnt (even with no rel match).
 while IFS= read -r d; do
   [ -d "$d" ] || continue
+  # Prefer /mnt/PHOENIX/<share> or /mnt/<share> over nested .../amazon/assets.
+  case "$d" in
+    /mnt/PHOENIX/"$share"|/mnt/"$share") echo "$d"; exit 0 ;;
+  esac
   if [ -n "$rel" ] && [ -f "$d/$rel" ]; then echo "$d"; exit 0; fi
   if [ -n "$rel" ]; then
     first=$(echo "$rel" | cut -d/ -f1)

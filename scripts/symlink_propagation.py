@@ -528,7 +528,8 @@ class SymlinkPropagationApp(tk.Tk):
         self._action_tip = WidgetHoverTip(
             self.action_btn,
             "Create temporary stubs at archaic paths so Blender can load libraries, "
-            "then Continue in Blender. Only removes/replaces symlinks — never real files.",
+            "then Revert and Remap in Blender (Remap does not save). "
+            "Only removes/replaces symlinks — never real files.",
         )
         WidgetHoverTip(
             self.confirm_btn,
@@ -819,7 +820,8 @@ class SymlinkPropagationApp(tk.Tk):
         self.confirm_btn.pack_forget()
         self._action_tip.text = (
             "Create temporary stubs at archaic paths so Blender can load libraries, "
-            "then Continue in Blender. Only removes/replaces symlinks — never real files."
+            "then Revert and Remap in Blender (Remap does not save). "
+            "Only removes/replaces symlinks — never real files."
         )
         self.status_var.set(
             f"{len(self.rows)} missing libraries. Search, Auto-map POSIX (for SMB), then Create stubs."
@@ -830,7 +832,7 @@ class SymlinkPropagationApp(tk.Tk):
         self.confirm_btn.pack(side=tk.RIGHT, padx=4)
         self._action_tip.text = "Waiting until Blender writes apply_done (or use I’ve finished in Blender)."
         self.status_var.set(
-            "Stubs ready. In Blender, click Symlink Propagation again (Continue), "
+            "Stubs ready. In Blender: Revert → verify hits → Remap (no auto-save), "
             "then return here — or press I've finished in Blender."
         )
         self._start_poll()
@@ -909,12 +911,15 @@ class SymlinkPropagationApp(tk.Tk):
             self.status_var.set("Stub create failed.")
             return
 
-        self.session["pairs"] = pairs
-        self.session["status"] = STATUS_STUBS_READY
-        self.session["stub_mode"] = mode
-        self.session["message"] = f"created={len(created)} failed={len(failed)}"
-        self.session["search_roots"] = list(self.search_roots)
-        save_session(self.session_file, self.session)
+        # Only keep pairs Windows can actually load (created list already excludes fails).
+        created_arch = {
+            (c.get("archaic_path") or "").replace("/", "\\").upper() for c in created
+        }
+        ready_pairs = [
+            p
+            for p in pairs
+            if (p.get("archaic_path") or "").replace("/", "\\").upper() in created_arch
+        ]
         if failed:
             detail = "\n".join(
                 f"{os.path.basename(f.get('archaic_path') or '?')}: {f.get('message')}"
@@ -923,8 +928,20 @@ class SymlinkPropagationApp(tk.Tk):
             messagebox.showwarning(
                 "Partial stubs",
                 f"Created {len(created)}, failed {len(failed)}.\n{detail}\n\n"
-                "Continue in Blender for successful pairs, or fix and retry.",
+                "Failed rows are excluded from Remap. Fix SSH maps / share access, "
+                "re-create those stubs, then Revert + Remap in Blender.",
             )
+        if not created:
+            self.action_btn.configure(state=tk.NORMAL)
+            self.status_var.set("No stubs visible to Windows — nothing to Remap.")
+            return
+
+        self.session["pairs"] = ready_pairs
+        self.session["status"] = STATUS_STUBS_READY
+        self.session["stub_mode"] = mode
+        self.session["message"] = f"created={len(created)} failed={len(failed)}"
+        self.session["search_roots"] = list(self.search_roots)
+        save_session(self.session_file, self.session)
         self._set_phase_waiting_blender()
 
     def _start_poll(self) -> None:

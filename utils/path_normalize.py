@@ -147,41 +147,16 @@ def apply_modern_paths(plan: list[dict[str, Any]], *, make_relative: bool = True
 
     Important: do **not** skip merely because abspath(raw) resolves through a
     stub symlink to the modern file — the stored filepath string can still be
-    archaic, and skipping leaves session stuck on stubs_ready (Continue loops).
+    archaic, and skipping leaves session stuck on stubs_ready (Remap loops).
+    Does not save the blend — caller / user decides when to write.
     """
-    by_archaic = {}
-    by_basename = {}
-    by_id = {}
-    for p in plan:
-        if not p.get("modern_path"):
-            continue
-        for key in (p.get("archaic_path"), p.get("stored_path")):
-            if key:
-                by_archaic[norm_path(key).upper()] = p
-        base = (p.get("basename") or os.path.basename(p.get("archaic_path") or "")).lower()
-        if base and base not in by_basename:
-            by_basename[base] = p
-        idn = (p.get("id_name") or "").lower()
-        if idn and idn not in by_id:
-            by_id[idn] = p
-
     stats = {"libraries": 0, "skipped_missing_modern": 0, "already_modern": 0, "applied": []}
 
     for lib in bpy.data.libraries:
         raw = getattr(lib, "filepath", "") or ""
         if not raw:
             continue
-        raw_norm = norm_path(raw)
-        archaic_resolved = abs_blend_path(raw)
-        pair = by_archaic.get(raw_norm.upper())
-        if not pair and archaic_resolved:
-            pair = by_archaic.get(archaic_resolved.upper())
-        if not pair:
-            pair = by_id.get((lib.name or "").lower())
-        if not pair:
-            pair = by_basename.get(os.path.basename(raw_norm).lower())
-        if not pair and archaic_resolved:
-            pair = by_basename.get(os.path.basename(archaic_resolved).lower())
+        pair = find_plan_pair_for_library(lib, plan)
         if not pair:
             continue
 
@@ -192,6 +167,7 @@ def apply_modern_paths(plan: list[dict[str, Any]], *, make_relative: bool = True
             stats["skipped_missing_modern"] += 1
             continue
 
+        raw_norm = norm_path(raw)
         new_fp = to_blend_relative(modern) if make_relative else norm_path(modern)
         raw_u = raw_norm.replace("/", "\\").upper()
         new_u = norm_path(new_fp).replace("/", "\\").upper()
@@ -240,6 +216,149 @@ def validate_modern_present(plan: list[dict[str, Any]]) -> tuple[bool, list[str]
     return (len(missing) == 0, missing)
 
 
+def library_filepath_is_modern(lib, pair: dict[str, Any]) -> bool:
+    """True if *lib*'s stored filepath already is the pair's modern target."""
+    modern = pair.get("modern_path") or ""
+    if not modern or not lib:
+        return False
+    raw = getattr(lib, "filepath", "") or ""
+    if not raw:
+        return False
+    raw_u = norm_path(raw).replace("/", "\\").upper()
+    modern_u = norm_path(modern).replace("/", "\\").upper()
+    try:
+        rel_u = norm_path(to_blend_relative(modern)).replace("/", "\\").upper()
+    except Exception:
+        rel_u = ""
+    if raw_u == modern_u or (rel_u and raw_u == rel_u):
+        return True
+    # abspath may already resolve to modern after a prior Remap / relative write
+    resolved = abs_blend_path(raw)
+    if resolved and norm_path(resolved).replace("/", "\\").upper() == modern_u:
+        return True
+    return False
+
+
+def _index_plan_pairs(plan: list[dict[str, Any]]) -> tuple[dict, dict, dict]:
+    """Build archaic/stored, basename, and id_name lookup tables for *plan*."""
+    by_archaic: dict[str, dict[str, Any]] = {}
+    by_basename: dict[str, dict[str, Any]] = {}
+    by_id: dict[str, dict[str, Any]] = {}
+    for p in plan:
+        if not p.get("modern_path"):
+            continue
+        for key in (p.get("archaic_path"), p.get("stored_path")):
+            if key:
+                by_archaic[norm_path(key).upper()] = p
+        base = (p.get("basename") or os.path.basename(p.get("archaic_path") or "")).lower()
+        if base and base not in by_basename:
+            by_basename[base] = p
+        idn = (p.get("id_name") or "").lower()
+        if idn and idn not in by_id:
+            by_id[idn] = p
+    return by_archaic, by_basename, by_id
+
+
+def find_plan_pair_for_library(lib, plan: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the wizard pair matching *lib*, or None."""
+    by_archaic, by_basename, by_id = _index_plan_pairs(plan)
+    raw = getattr(lib, "filepath", "") or ""
+    if not raw:
+        return None
+    raw_norm = norm_path(raw)
+    archaic_resolved = abs_blend_path(raw)
+    pair = by_archaic.get(raw_norm.upper())
+    if not pair and archaic_resolved:
+        pair = by_archaic.get(archaic_resolved.upper())
+    if not pair:
+        pair = by_id.get((lib.name or "").lower())
+    if not pair:
+        pair = by_basename.get(os.path.basename(raw_norm).lower())
+    if not pair and archaic_resolved:
+        pair = by_basename.get(os.path.basename(archaic_resolved).lower())
+    return pair
+
+
+def remap_readiness(plan: list[dict[str, Any]]) -> tuple[bool, str]:
+    """
+    Whether Remap is safe to run after stubs + Revert.
+
+    Only wizard-plan (in-scope) libraries gate Remap. Other missing libs in the
+    blend (lighting, materials, scenes, …) are ignored — use Atomic/FMT for those.
+
+    For each in-scope lib:
+      - already on modern path → ok (no stub required)
+      - still archaic → modern + archaic stub must exist; lib must load with
+        armature/baked data (not is_missing, not empty stub hit)
+    """
+    needing: list[str] = []
+    already_modern: list[str] = []
+    still_missing: list[str] = []
+    no_arm_data: list[str] = []
+    missing_modern: list[str] = []
+    missing_stubs: list[str] = []
+
+    for lib in bpy.data.libraries:
+        pair = find_plan_pair_for_library(lib, plan)
+        if not pair:
+            # Out of Symlink Propagation scope — never blocks Remap.
+            continue
+
+        modern = pair.get("modern_path") or ""
+        if not modern:
+            continue
+        if not os.path.isfile(modern):
+            missing_modern.append(os.path.basename(modern) or lib.name)
+            continue
+
+        if library_filepath_is_modern(lib, pair):
+            already_modern.append(lib.name)
+            continue
+
+        archaic = pair.get("archaic_path") or ""
+        if archaic and not os.path.isfile(archaic):
+            missing_stubs.append(os.path.basename(archaic) or lib.name)
+            continue
+
+        if getattr(lib, "is_missing", False):
+            still_missing.append(lib.name)
+            continue
+        if not (library_links_armature(lib) or library_is_baked_character_path(lib)):
+            no_arm_data.append(lib.name)
+            continue
+        needing.append(lib.name)
+
+    if missing_modern:
+        preview = "; ".join(missing_modern[:4])
+        return False, f"{len(missing_modern)} in-scope modern path(s) missing: {preview}"
+    if missing_stubs:
+        preview = "; ".join(missing_stubs[:4])
+        return False, (
+            f"{len(missing_stubs)} in-scope stub(s) missing — fix in wizard, then Revert: {preview}"
+        )
+    if still_missing:
+        preview = ", ".join(still_missing[:4])
+        return False, (
+            f"In-scope library still missing (bad/outdated stub?): {preview} — "
+            "swap stub, then Revert"
+        )
+    if no_arm_data:
+        preview = ", ".join(no_arm_data[:4])
+        return False, (
+            f"In-scope lib loaded without armature data (invalid stub hit?): {preview} — "
+            "swap stub, then Revert before Remap"
+        )
+    if not needing and not already_modern:
+        return False, (
+            "No in-scope libraries match wizard pairs — Revert after stubs so Blender "
+            "reloads archaic paths, or paths were invalidated"
+        )
+    if not needing:
+        return True, f"{len(already_modern)} in-scope librar(ies) already modern"
+    extra = f", {len(already_modern)} already modern" if already_modern else ""
+    return True, f"{len(needing)} in-scope librar(ies) ready to remap{extra}"
+
+
 def make_paths_relative() -> None:
     """Wrap Blender make_paths_relative."""
     bpy.ops.file.make_paths_relative()
@@ -279,9 +398,10 @@ def schedule_save_after_rempath() -> None:
 
 def run_pending_symlink_apply() -> dict[str, Any]:
     """
-    Consume session pending_apply after File > Revert / load.
+    Consume session pending_apply after File > Revert / load (legacy).
 
-    Returns a result dict (ok, remapped, message). Safe to call from load_post.
+    Prefer explicit Remap after Revert — new flow does not set pending_apply.
+    Never auto-saves; Remap / this path only rewrite Library.filepath in memory.
     """
     from . import stub_handoff
 
@@ -306,42 +426,28 @@ def run_pending_symlink_apply() -> dict[str, Any]:
         )
         return {"ok": False, "remapped": 0, "message": "no pairs"}
 
-    ok_a, missing_a = validate_archaic_present(plan)
-    if not ok_a:
-        msg = f"apply blocked: {len(missing_a)} archaic still missing"
+    ready, reason = remap_readiness(plan)
+    if not ready:
         stub_handoff.set_session_status(
             stub_handoff.STATUS_STUBS_READY,
             remapped_count=0,
-            message=msg,
+            message=reason,
         )
-        return {"ok": False, "remapped": 0, "message": msg}
-
-    ok_m, missing_m = validate_modern_present(plan)
-    if not ok_m:
-        msg = f"apply blocked: {len(missing_m)} modern path(s) missing on disk"
-        stub_handoff.set_session_status(
-            stub_handoff.STATUS_STUBS_READY,
-            remapped_count=0,
-            message=msg,
-        )
-        return {"ok": False, "remapped": 0, "message": msg}
+        return {"ok": False, "remapped": 0, "message": reason}
 
     stats = apply_modern_paths(plan, make_relative=do_relative)
     n = int(stats.get("libraries") or 0)
     already = int(stats.get("already_modern") or 0)
     if n > 0:
-        # Must persist: filepath edits alone often leave is_dirty=False.
-        schedule_save_after_rempath()
         stub_handoff.set_session_status(
             stub_handoff.STATUS_APPLY_DONE,
             remapped_count=n,
-            message=f"remapped={n} (save scheduled)",
+            message=f"remapped={n} (not saved — save manually when ready)",
             applied=stats.get("applied") or [],
         )
         return {"ok": True, "remapped": n, "message": f"remapped={n}", "applied": stats.get("applied")}
 
     if already > 0 and already >= len([p for p in plan if p.get("modern_path")]):
-        # Stored paths already modern (or rempath was a no-op) — don't leave Continue looping.
         stub_handoff.set_session_status(
             stub_handoff.STATUS_APPLY_DONE,
             remapped_count=0,
