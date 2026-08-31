@@ -88,6 +88,24 @@ def get_pair_manual(context):
     return None, None
 
 
+def get_prop_pair(context):
+    """Return (orig_prop, rep_prop) non-armature objects from scene props, or (None, None)."""
+    props = getattr(context.scene, "dynamic_link_manager", None)
+    if not props:
+        return None, None
+    orig = getattr(props, "original_prop", None)
+    rep = getattr(props, "replacement_prop", None)
+    if (
+        orig
+        and orig.type != "ARMATURE"
+        and rep
+        and rep.type != "ARMATURE"
+        and orig != rep
+    ):
+        return orig, rep
+    return None, None
+
+
 def get_pair_automatic(context):
     """Discover one pair by convention: Name_Rigify and Name_Rigify.001. Returns (orig, rep) or (None, None)."""
     pairs = []
@@ -129,15 +147,16 @@ def _has_als_anywhere(orig):
             return True
     except Exception:
         pass
-    for pb in orig.pose.bones:
-        if key in pb:
-            return True
-        try:
-            als = pb.get("als")
-            if als is not None and callable(getattr(als, "keys", None)) and "turn_on" in als.keys():
+    if orig.type == "ARMATURE" and getattr(orig, "pose", None):
+        for pb in orig.pose.bones:
+            if key in pb:
                 return True
-        except Exception:
-            pass
+            try:
+                als = pb.get("als")
+                if als is not None and callable(getattr(als, "keys", None)) and "turn_on" in als.keys():
+                    return True
+            except Exception:
+                pass
     return False
 
 
@@ -180,24 +199,25 @@ def _debug_als_lookup(orig):
         print(f"[DLM MigNLA]   orig RNA props (layer/als/turn/anim): {layer_like}")
     except Exception as e:
         print(f"[DLM MigNLA]   orig bl_rna.properties error: {e}")
-    # Every bone that has keys
-    bones_with_keys = []
-    for pb in orig.pose.bones:
-        if pb.keys():
-            bones_with_keys.append((pb.name, list(pb.keys())))
-    print(f"[DLM MigNLA]   bones with id_props ({len(bones_with_keys)}): {bones_with_keys[:20]}{'...' if len(bones_with_keys) > 20 else ''}")
-    for bname, bkeys in bones_with_keys[:10]:
-        pb = orig.pose.bones[bname]
-        print(f"[DLM MigNLA]   bone {bname!r}: keys={bkeys}")
-        for k in bkeys:
-            try:
-                v = pb[k]
-                if callable(getattr(v, "keys", None)):
-                    print(f"[DLM MigNLA]     [{k!r}] (group) keys: {list(v.keys())}")
-                else:
-                    print(f"[DLM MigNLA]     [{k!r}] = {v!r}")
-            except Exception as e:
-                print(f"[DLM MigNLA]     [{k!r}] error: {e}")
+    # Every bone that has keys (armatures only)
+    if orig.type == "ARMATURE" and getattr(orig, "pose", None):
+        bones_with_keys = []
+        for pb in orig.pose.bones:
+            if pb.keys():
+                bones_with_keys.append((pb.name, list(pb.keys())))
+        print(f"[DLM MigNLA]   bones with id_props ({len(bones_with_keys)}): {bones_with_keys[:20]}{'...' if len(bones_with_keys) > 20 else ''}")
+        for bname, bkeys in bones_with_keys[:10]:
+            pb = orig.pose.bones[bname]
+            print(f"[DLM MigNLA]   bone {bname!r}: keys={bkeys}")
+            for k in bkeys:
+                try:
+                    v = pb[k]
+                    if callable(getattr(v, "keys", None)):
+                        print(f"[DLM MigNLA]     [{k!r}] (group) keys: {list(v.keys())}")
+                    else:
+                        print(f"[DLM MigNLA]     [{k!r}] = {v!r}")
+                except Exception as e:
+                    print(f"[DLM MigNLA]     [{k!r}] error: {e}")
     print("[DLM MigNLA] === end AnimLayers debug ===")
 
 
@@ -231,6 +251,8 @@ def _mirror_als_turn_on(orig, rep):
                 rep.data[key] = orig.data[key]
         except Exception:
             pass
+    if orig.type != "ARMATURE" or not getattr(orig, "pose", None) or not getattr(rep, "pose", None):
+        return
     for pbone in orig.pose.bones:
         if pbone.name not in rep.pose.bones:
             continue
@@ -403,11 +425,55 @@ def _copy_pose_bone_channels(src, dst, skip=()):
             dst.rotation_euler = src.rotation_euler.copy()
 
 
+def _keyed_object_channels(obj):
+    """Set of keyed object transform kinds: location / rotation / scale."""
+    keyed = set()
+    for action in _collect_orig_actions(obj):
+        for fc in _iter_action_fcurves(action):
+            path = getattr(fc, "data_path", "") or ""
+            # Object channels are top-level (location, rotation_euler, scale).
+            if path.startswith("pose.bones"):
+                continue
+            base = path.split("[", 1)[0]
+            if base == "location":
+                keyed.add("location")
+            elif base.startswith("rotation"):
+                keyed.add("rotation")
+            elif base == "scale":
+                keyed.add("scale")
+    return keyed
+
+
+def _copy_unkeyed_object_transform(orig, rep):
+    """Copy orig→rep object loc/rot/scale for channels without keys."""
+    if not orig or not rep:
+        return 0
+    skip = _keyed_object_channels(orig)
+    n = 0
+    if "location" not in skip:
+        rep.location = orig.location.copy()
+        n += 1
+    if "scale" not in skip:
+        rep.scale = orig.scale.copy()
+        n += 1
+    if "rotation" not in skip:
+        rep.rotation_mode = orig.rotation_mode
+        if orig.rotation_mode == "QUATERNION":
+            rep.rotation_quaternion = orig.rotation_quaternion.copy()
+        elif orig.rotation_mode == "AXIS_ANGLE":
+            rep.rotation_axis_angle = orig.rotation_axis_angle[:]
+        else:
+            rep.rotation_euler = orig.rotation_euler.copy()
+        n += 1
+    print(f"[DLM MigNLA] copied unkeyed object channels={n} (skip={sorted(skip)})")
+    return n
+
+
 def _copy_unkeyed_pose(orig, rep):
     """Copy orig→rep local pose for channels without keys (full pose if no action).
 
     Action'd bones keep their keyed channels; unkeyed bones (and unkeyed channels
-    on partially keyed bones) get the current pose from orig.
+    on partially keyed bones) get the current pose from orig. No-op for non-armatures.
     """
     if not orig or not rep or not getattr(orig, "pose", None) or not getattr(rep, "pose", None):
         return 0
@@ -426,15 +492,22 @@ def _copy_unkeyed_pose(orig, rep):
     return n
 
 
+def _copy_unkeyed_transforms(orig, rep):
+    """Copy unkeyed object transform + (if armature) unkeyed pose. Returns (obj_n, bone_n)."""
+    return _copy_unkeyed_object_transform(orig, rep), _copy_unkeyed_pose(orig, rep)
+
 def run_mig_nla(orig, rep, report=None, context=None):
     """Migrate NLA: copy tracks and strips to replacement; or mirror action slot when no NLA (MigNLA).
     Actions are duplicated so repchar has independent copies.
     Always copies unkeyed pose (loc/rot/scale) from orig→rep, with or without an action.
     Pass context so Animation Layers mirroring runs with rep as active object."""
     if not orig.animation_data:
-        n = _copy_unkeyed_pose(orig, rep)
+        obj_n, bone_n = _copy_unkeyed_transforms(orig, rep)
         if report:
-            report({"INFO"}, f"No animation_data; copied unkeyed pose ({n} bones).")
+            report(
+                {"INFO"},
+                f"No animation_data; unkeyed object channels={obj_n}, bones={bone_n}.",
+            )
         return
     ad = orig.animation_data
     has_nla = ad.nla_tracks and len(ad.nla_tracks) > 0
@@ -481,15 +554,18 @@ def run_mig_nla(orig, rep, report=None, context=None):
         with _rep_active_for_animlayers(context, rep):
             _mirror_als_turn_on(orig, rep)
             _activate_topmost_als(context, orig, rep)
-        n = _copy_unkeyed_pose(orig, rep)
+        obj_n, bone_n = _copy_unkeyed_transforms(orig, rep)
         if report:
             if active_action:
                 report(
                     {"INFO"},
-                    f"No NLA; action+slot copied; unkeyed pose on {n} bone(s).",
+                    f"No NLA; action+slot copied; unkeyed obj={obj_n} bones={bone_n}.",
                 )
             else:
-                report({"INFO"}, f"No NLA/action; copied unkeyed pose ({n} bones).")
+                report(
+                    {"INFO"},
+                    f"No NLA/action; unkeyed obj={obj_n} bones={bone_n}.",
+                )
         return
     if rep.animation_data is None:
         rep.animation_data_create()
@@ -572,7 +648,7 @@ def run_mig_nla(orig, rep, report=None, context=None):
     with _rep_active_for_animlayers(context, rep):
         _mirror_als_turn_on(orig, rep)
         _activate_topmost_als(context, orig, rep)
-    n = _copy_unkeyed_pose(orig, rep)
+    obj_n, bone_n = _copy_unkeyed_transforms(orig, rep)
     if report:
         _debug_als_lookup(orig)
         has_als = _has_als_anywhere(orig)
@@ -580,11 +656,13 @@ def run_mig_nla(orig, rep, report=None, context=None):
         if has_als:
             report(
                 {"INFO"},
-                f"NLA + Animation Layers migrated; unkeyed pose on {n} bone(s).",
+                f"NLA + Animation Layers migrated; unkeyed obj={obj_n} bones={bone_n}.",
             )
         else:
-            report({"INFO"}, f"NLA migrated; unkeyed pose on {n} bone(s).")
-
+            report(
+                {"INFO"},
+                f"NLA migrated; unkeyed obj={obj_n} bones={bone_n}.",
+            )
 
 EXCLUDE_PROPS = {"_RNA_UI", "rigify_type", "rigify_parameters"}
 
@@ -631,30 +709,31 @@ def run_mig_cust_props(orig, rep):
     """Custom properties: copy overridden settings (ID props only, incl. nested e.g. Settings/Devices) from orig to rep."""
     debug = True
     print(f"[DLM MigCustProps] orig={orig.name!r} rep={rep.name!r}")
-    # Armature object
     o_keys = list(orig.keys())
-    print(f"[DLM MigCustProps] armature orig keys (all): {o_keys}")
+    print(f"[DLM MigCustProps] object orig keys (all): {o_keys}")
     _copy_custom_props_from(orig, rep, f"obj:{orig.name}", debug)
-    # Bones with any id props
-    bones_with_keys = [(pb.name, list(pb.keys())) for pb in orig.pose.bones if pb.keys()]
-    print(f"[DLM MigCustProps] bones with id_props: {bones_with_keys}")
-    for pbone in orig.pose.bones:
-        if pbone.name not in rep.pose.bones:
-            continue
-        rbone = rep.pose.bones[pbone.name]
-        _copy_custom_props_from(pbone, rbone, f"bone:{pbone.name}", debug)
-    # After: rep armature and Settings bone if present
-    print(f"[DLM MigCustProps] rep armature keys after: {list(rep.keys())}")
-    if "Settings" in rep.pose.bones:
-        sb = rep.pose.bones["Settings"]
-        print(f"[DLM MigCustProps] rep bone Settings keys after: {list(sb.keys())}")
-        if sb.keys():
-            for k in sb.keys():
-                v = sb[k]
-                if _is_id_prop_group(v):
-                    print(f"[DLM MigCustProps]   Settings[{k!r}] (group) keys: {list(v.keys())}")
-                else:
-                    print(f"[DLM MigCustProps]   Settings[{k!r}] = {v!r}")
+    # Bones with any id props (armatures only)
+    if orig.type == "ARMATURE" and getattr(orig, "pose", None) and getattr(rep, "pose", None):
+        bones_with_keys = [(pb.name, list(pb.keys())) for pb in orig.pose.bones if pb.keys()]
+        print(f"[DLM MigCustProps] bones with id_props: {bones_with_keys}")
+        for pbone in orig.pose.bones:
+            if pbone.name not in rep.pose.bones:
+                continue
+            rbone = rep.pose.bones[pbone.name]
+            _copy_custom_props_from(pbone, rbone, f"bone:{pbone.name}", debug)
+        print(f"[DLM MigCustProps] rep object keys after: {list(rep.keys())}")
+        if "Settings" in rep.pose.bones:
+            sb = rep.pose.bones["Settings"]
+            print(f"[DLM MigCustProps] rep bone Settings keys after: {list(sb.keys())}")
+            if sb.keys():
+                for k in sb.keys():
+                    v = sb[k]
+                    if _is_id_prop_group(v):
+                        print(f"[DLM MigCustProps]   Settings[{k!r}] (group) keys: {list(v.keys())}")
+                    else:
+                        print(f"[DLM MigCustProps]   Settings[{k!r}] = {v!r}")
+    else:
+        print(f"[DLM MigCustProps] rep object keys after: {list(rep.keys())}")
 
 
 def _retarget_id(ob, orig, rep, orig_to_rep):
@@ -1155,3 +1234,81 @@ def run_full_migration(context):
     except Exception as e:
         return False, str(e)
     return True, f"Migrated {orig.name} → {rep.name}"
+
+
+def run_full_prop_migration(context):
+    """Migrate a non-armature object pair: CopyAttr, MigNLA, MigCustProps, MigObjConst,
+    MigObjRelatives, RetargRelatives. Returns (True, message) or (False, error)."""
+    orig, rep = get_prop_pair(context)
+    if not orig or not rep:
+        return False, "No prop pair (set Original/Replacement Prop)."
+    if orig.type == "ARMATURE" or rep.type == "ARMATURE":
+        return False, "Prop Migrator does not accept armatures (use Character Migrator)."
+
+    orig_to_rep = {orig: rep}
+    rep_descendants = descendants(rep)
+    try:
+        run_copy_attr(orig, rep)
+        run_mig_nla(orig, rep, context=context)
+        run_mig_cust_props(orig, rep)
+        run_mig_obj_const(orig, rep, orig_to_rep)
+        run_mig_obj_relatives(orig, rep, orig_to_rep, scene=context.scene)
+        run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep)
+    except Exception as e:
+        return False, str(e)
+    return True, f"Prop migrated {orig.name} → {rep.name}"
+
+
+def run_remove_original_prop(context, orig, rep, report=None):
+    """Remap refs orig→rep, unlink/delete orig prop object, clear original_prop."""
+    from ..utils.remap_usages import remap_object_usages, remap_parents
+
+    if not orig or orig.name not in bpy.data.objects:
+        if report:
+            report({"WARNING"}, "No original prop to remove")
+        return False
+    if orig.type == "ARMATURE":
+        if report:
+            report({"ERROR"}, "Use Character Migrator Remove Original for armatures")
+        return False
+    if orig == rep:
+        if report:
+            report({"ERROR"}, "Original and replacement cannot be the same object")
+        return False
+
+    name = orig.name
+    if rep is not None:
+        mapping = {orig: rep}
+        remap_parents(mapping)
+        remap_object_usages(orig, rep, skip_owners={orig})
+
+    # Soft-unlink override props; hard-remove local ones.
+    is_override = getattr(orig, "override_library", None) is not None
+    for coll in list(orig.users_collection):
+        try:
+            coll.objects.unlink(orig)
+        except Exception:
+            pass
+    if not is_override:
+        try:
+            bpy.data.objects.remove(orig, do_unlink=True)
+        except Exception as e:
+            if report:
+                report({"ERROR"}, f"Could not delete {name}: {e}")
+            return False
+    else:
+        # Leave override datablock; hide so it is gone from the scene.
+        try:
+            orig.hide_viewport = True
+            orig.hide_render = True
+        except Exception:
+            pass
+
+    props = getattr(context.scene, "dynamic_link_manager", None)
+    if props is not None:
+        props.original_prop = None
+
+    if report:
+        mode = "soft-unlinked" if is_override else "deleted"
+        report({"INFO"}, f"Removed original prop {name} ({mode})")
+    return True

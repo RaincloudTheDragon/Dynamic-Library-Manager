@@ -51,6 +51,25 @@ class DynamicLinkManagerProperties(PropertyGroup):
         poll=lambda self, obj: obj and obj.type == "ARMATURE",
     )
 
+    # Prop Migrator: object-only pairs (meshes, empties, curves, etc. — not armatures)
+    propmig_section_expanded: BoolProperty(
+        name="Prop Migrator Expanded",
+        description="Show or hide the Prop Migrator section",
+        default=False,
+    )
+    original_prop: PointerProperty(
+        name="Original Prop",
+        description="Object to migrate from (any type except armature)",
+        type=bpy.types.Object,
+        poll=lambda self, obj: obj and obj.type != "ARMATURE",
+    )
+    replacement_prop: PointerProperty(
+        name="Replacement Prop",
+        description="Object to migrate to (any type except armature)",
+        type=bpy.types.Object,
+        poll=lambda self, obj: obj and obj.type != "ARMATURE",
+    )
+
     # MigBBody: manual mesh pair when CC/iClone-style auto-detection fails
     migbbody_manual_override: BoolProperty(
         name="Manual body meshes",

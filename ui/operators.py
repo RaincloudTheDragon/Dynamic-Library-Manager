@@ -582,6 +582,229 @@ class DLM_OT_picker_replacement_character(Operator):
         return {"FINISHED"}
 
 
+def _get_prop_migrator_pair(context):
+    """Return (orig, rep) non-armature prop pair from scene props."""
+    from ..ops.migrator import get_prop_pair
+
+    return get_prop_pair(context)
+
+
+class DLM_OT_picker_original_prop(Operator):
+    bl_idname = "dlm.picker_original_prop"
+    bl_label = "Pick Original Prop"
+    bl_description = "Set the original prop from the active object (not an armature)"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        obj = context.active_object
+        if not obj or obj.type == "ARMATURE":
+            self.report({"WARNING"}, "Select a non-armature object")
+            return {"CANCELLED"}
+        context.scene.dynamic_link_manager.original_prop = obj
+        self.report({"INFO"}, f"Original prop: {obj.name}")
+        return {"FINISHED"}
+
+
+class DLM_OT_picker_replacement_prop(Operator):
+    bl_idname = "dlm.picker_replacement_prop"
+    bl_label = "Pick Replacement Prop"
+    bl_description = "Set the replacement prop from the active object (not an armature)"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        obj = context.active_object
+        if not obj or obj.type == "ARMATURE":
+            self.report({"WARNING"}, "Select a non-armature object")
+            return {"CANCELLED"}
+        context.scene.dynamic_link_manager.replacement_prop = obj
+        self.report({"INFO"}, f"Replacement prop: {obj.name}")
+        return {"FINISHED"}
+
+
+class DLM_OT_prop_migrator_remove_original(Operator):
+    bl_idname = "dlm.prop_migrator_remove_original"
+    bl_label = "Remove Original"
+    bl_description = "Remap refs to replacement and remove the original prop object"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        from ..ops.migrator import run_remove_original_prop
+
+        orig, rep = _get_prop_migrator_pair(context)
+        # Allow remove when only orig is set (rep optional but recommended).
+        props = getattr(context.scene, "dynamic_link_manager", None)
+        orig = orig or (getattr(props, "original_prop", None) if props else None)
+        rep = rep or (getattr(props, "replacement_prop", None) if props else None)
+        if not orig:
+            self.report({"WARNING"}, "No original prop selected")
+            return {"CANCELLED"}
+        if not run_remove_original_prop(context, orig, rep, self.report):
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class DLM_OT_prop_migrator_copy_attributes(Operator):
+    bl_idname = "dlm.prop_migrator_copy_attributes"
+    bl_label = "CopyAttr"
+    bl_description = "Copy location, rotation, and scale from original to replacement prop"
+    bl_icon = "COPY_ID"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_prop_migrator_pair(context)
+        if not orig or not rep:
+            self.report({"ERROR"}, "No valid prop pair (set Original/Replacement Prop).")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_copy_attr
+
+            run_copy_attr(orig, rep)
+            self.report({"INFO"}, "Copy attributes done.")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_prop_migrator_migrate_nla(Operator):
+    bl_idname = "dlm.prop_migrator_migrate_nla"
+    bl_label = "MigNLA"
+    bl_description = (
+        "Migrate NLA/action from original to replacement prop; "
+        "also copy unkeyed object transform"
+    )
+    bl_icon = "NLA"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_prop_migrator_pair(context)
+        if not orig or not rep:
+            self.report({"ERROR"}, "No valid prop pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_mig_nla
+
+            run_mig_nla(orig, rep, report=self.report, context=context)
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_prop_migrator_custom_properties(Operator):
+    bl_idname = "dlm.prop_migrator_custom_properties"
+    bl_label = "MigCustProps"
+    bl_description = "Copy custom properties from original to replacement prop"
+    bl_icon = "PROPERTIES"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_prop_migrator_pair(context)
+        if not orig or not rep:
+            self.report({"ERROR"}, "No valid prop pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_mig_cust_props
+
+            run_mig_cust_props(orig, rep)
+            self.report({"INFO"}, "Custom properties done.")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_prop_migrator_object_constraints(Operator):
+    bl_idname = "dlm.prop_migrator_object_constraints"
+    bl_label = "MigObjConst"
+    bl_description = "Migrate object constraints from original to replacement prop"
+    bl_icon = "CONSTRAINT"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_prop_migrator_pair(context)
+        if not orig or not rep:
+            self.report({"ERROR"}, "No valid prop pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_mig_obj_const
+
+            run_mig_obj_const(orig, rep, {orig: rep})
+            self.report({"INFO"}, "Object constraints done.")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_prop_migrator_object_relatives(Operator):
+    bl_idname = "dlm.prop_migrator_object_relatives"
+    bl_label = "MigObjRelatives"
+    bl_description = "Migrate object parenting from original to replacement prop"
+    bl_icon = "OBJECT_ORIGIN"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_prop_migrator_pair(context)
+        if not orig or not rep:
+            self.report({"ERROR"}, "No valid prop pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_mig_obj_relatives
+
+            run_mig_obj_relatives(orig, rep, {orig: rep}, scene=context.scene)
+            self.report({"INFO"}, "Object relatives done.")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_prop_migrator_retarget_relations(Operator):
+    bl_idname = "dlm.prop_migrator_retarget_relations"
+    bl_label = "RetargRelatives"
+    bl_description = "Retarget scene relations (parents, constraints, modifiers) to the replacement prop"
+    bl_icon = "ORIENTATION_PARENT"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        orig, rep = _get_prop_migrator_pair(context)
+        if not orig or not rep:
+            self.report({"ERROR"}, "No valid prop pair.")
+            return {"CANCELLED"}
+        try:
+            from ..ops.migrator import run_retarg_relatives
+            from ..utils import descendants
+
+            run_retarg_relatives(orig, rep, descendants(rep), {orig: rep})
+            self.report({"INFO"}, "Retarget relatives done.")
+            return {"FINISHED"}
+        except Exception as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+
+
+class DLM_OT_prop_migrator_run_all(Operator):
+    bl_idname = "dlm.prop_migrator_run_all"
+    bl_label = "Migrate Prop"
+    bl_description = (
+        "Run all prop migration steps: CopyAttr, MigNLA, MigCustProps, "
+        "MigObjConst, MigObjRelatives, RetargRelatives"
+    )
+    bl_icon = "PLAY"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        from ..ops.migrator import run_full_prop_migration
+
+        ok, msg = run_full_prop_migration(context)
+        if ok:
+            self.report({"INFO"}, msg)
+            return {"FINISHED"}
+        self.report({"ERROR"}, msg)
+        return {"CANCELLED"}
+
+
 def _tweak_poll(context):
     orig, rep = _get_migrator_pair(context)
     return orig is not None and rep is not None
@@ -850,6 +1073,16 @@ OPERATOR_CLASSES = [
     DLM_OT_migrator_bone_constraints,
     DLM_OT_migrator_retarget_relations,
     DLM_OT_migrator_basebody_shapekeys,
+    DLM_OT_picker_original_prop,
+    DLM_OT_picker_replacement_prop,
+    DLM_OT_prop_migrator_remove_original,
+    DLM_OT_prop_migrator_copy_attributes,
+    DLM_OT_prop_migrator_migrate_nla,
+    DLM_OT_prop_migrator_custom_properties,
+    DLM_OT_prop_migrator_object_constraints,
+    DLM_OT_prop_migrator_object_relatives,
+    DLM_OT_prop_migrator_retarget_relations,
+    DLM_OT_prop_migrator_run_all,
     DLM_OT_tweak_add_arm,
     DLM_OT_tweak_remove_arm,
     DLM_OT_tweak_bake_arm,
