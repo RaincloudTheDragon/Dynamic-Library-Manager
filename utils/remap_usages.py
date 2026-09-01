@@ -565,8 +565,186 @@ def _remap_drivers_on(owner, mapping, skip_self_drivers_on):
     return n
 
 
+def _has_non_unit_scale(ob) -> bool:
+    """True when object scale is not (1, 1, 1)."""
+    from mathutils import Vector
+
+    return (Vector(ob.scale) - Vector((1.0, 1.0, 1.0))).length > 1e-4
+
+
+def _matrix_world_loc_rot_only(ob):
+    """Return parent ``matrix_world`` with scale removed (loc/rot only)."""
+    from mathutils import Matrix
+
+    loc, rot, _scale = ob.matrix_world.decompose()
+    return Matrix.LocRotScale(loc, rot, (1.0, 1.0, 1.0))
+
+
+def _new_parent_matrix_for_reparent(new_parent, old_parent):
+    """
+    Parent matrix used when solving ``new_local`` during reparent.
+
+    When *old_parent* is scaled, *new_parent* is normalized to unit scale and
+    only loc/rot is used so rep props can stay at applied scale.
+    """
+    if _has_non_unit_scale(old_parent):
+        if _has_non_unit_scale(new_parent):
+            new_parent.scale = (1.0, 1.0, 1.0)
+        return _matrix_world_loc_rot_only(new_parent)
+    return new_parent.matrix_world.copy()
+
+
+def _iter_action_fcurves(action):
+    """Yield f-curves from legacy actions and Blender 5 action layers."""
+    if action is None:
+        return
+    legacy = getattr(action, "fcurves", None)
+    if legacy is not None:
+        for fc in legacy:
+            yield fc
+    for layer in getattr(action, "layers", []) or []:
+        for strip in getattr(layer, "strips", []) or []:
+            if getattr(strip, "type", None) != "KEYFRAME":
+                continue
+            for cb in getattr(strip, "channelbags", []) or []:
+                for fc in getattr(cb, "fcurves", []) or []:
+                    yield fc
+
+
+def transform_object_action_for_reparent(ob, old_parent, new_parent) -> bool:
+    """
+    Rewrite *ob* action keyframes from *old_parent* local space into *new_parent* space.
+
+    Grabbers (and similar children) often have location/rotation actions authored under
+    a scaled orig prop. RetargRelatives reparents them onto a unit-scale rep; without
+    retargeting the curves, evaluated locals stay in the old parent space and hands
+    follow grabbers meters off the mesh when scrubbing.
+    """
+    ad = getattr(ob, "animation_data", None)
+    if ad is None or ad.action is None or old_parent is None or new_parent is None:
+        return False
+    fcurves = list(_iter_action_fcurves(ad.action))
+    if not fcurves:
+        return False
+    times = sorted({kp.co.x for fc in fcurves for kp in fc.keyframe_points})
+    if not times:
+        return False
+
+    scene = bpy.context.scene
+    view_layer = bpy.context.view_layer
+    old_frame = scene.frame_current
+    rot_mode = ob.rotation_mode
+    local_by_time = {}
+
+    try:
+        for t in times:
+            scene.frame_set(int(t))
+            view_layer.update()
+            old_mw = old_parent.matrix_world.copy()
+            new_mw = _new_parent_matrix_for_reparent(new_parent, old_parent)
+            local_by_time[t] = new_mw.inverted() @ old_mw @ ob.matrix_local.copy()
+
+        for fc in fcurves:
+            path = fc.data_path
+            idx = fc.array_index
+            for kp in fc.keyframe_points:
+                local_new = local_by_time.get(kp.co.x)
+                if local_new is None:
+                    continue
+                if path == "location":
+                    kp.co.y = local_new.to_translation()[idx]
+                elif path == "rotation_euler":
+                    kp.co.y = local_new.to_euler(rot_mode)[idx]
+                elif path == "rotation_quaternion":
+                    kp.co.y = local_new.to_quaternion()[idx]
+                elif path == "scale":
+                    kp.co.y = local_new.to_scale()[idx]
+            if hasattr(fc, "update"):
+                fc.update()
+
+        scene.frame_set(old_frame)
+        view_layer.update()
+        print(
+            f"[DLM remap] retargeted action {ad.action.name!r} on {ob.name!r} "
+            f"for reparent {old_parent.name!r} -> {new_parent.name!r}"
+        )
+        return True
+    except Exception:
+        scene.frame_set(old_frame)
+        view_layer.update()
+        return False
+
+
+def sync_prop_rep_from_orig(orig, rep) -> bool:
+    """
+    Align rep prop transform to orig when MigNLA did not stick (common on overrides).
+
+    Without this, rep can sit at the origin with no action while orig is animated;
+    reparented grabbers then inherit rep's static origin and hands follow them off-set.
+    """
+    if orig is None or rep is None or orig.type == "ARMATURE" or rep.type == "ARMATURE":
+        return False
+    ad = getattr(rep, "animation_data", None)
+    if ad and ad.action:
+        return False
+    try:
+        rep.scale = (1.0, 1.0, 1.0)
+        rep.location = orig.location.copy()
+        rep.rotation_mode = orig.rotation_mode
+        if orig.rotation_mode == "QUATERNION":
+            rep.rotation_quaternion = orig.rotation_quaternion.copy()
+        else:
+            rep.rotation_euler = orig.rotation_euler.copy()
+        print(
+            f"[DLM remap] synced prop rep {rep.name!r} loc/rot from {orig.name!r} "
+            "(rep had no action)"
+        )
+        return True
+    except Exception:
+        return False
+
+
+def reparent_preserve_world_path(ob, new_parent, old_parent=None):
+    """
+    Reparent *ob* onto *new_parent* so its world motion matches the old parent chain.
+
+    Blender uses ``matrix_world = parent.matrix_world @ matrix_local``.
+
+    Prop migration often copies orig scale onto rep (CopyAttr), then RetargRelatives
+    reparents grabbers while scales still match. When rep scale is cleared to
+    ``(1, 1, 1)`` afterward, a compensation computed against scaled rep matrices
+    leaves children ~meters off (hands follow grabbers but both fly off the mesh).
+
+    When *old_parent* has non-unit scale, target *new_parent* at unit scale and
+    compensate with the full scaled orig matrix::
+
+        new_local = new_parent.mw(unit) ^ -1 @ old_parent.mw @ old_local
+    """
+    old_parent = old_parent if old_parent is not None else ob.parent
+    if old_parent is None or new_parent is None or ob == new_parent:
+        return False
+    try:
+        transform_object_action_for_reparent(ob, old_parent, new_parent)
+
+        old_local = ob.matrix_local.copy()
+        old_parent_mw = old_parent.matrix_world.copy()
+        new_parent_mw = _new_parent_matrix_for_reparent(new_parent, old_parent)
+        compensated_local = new_parent_mw.inverted() @ old_parent_mw @ old_local
+        ob.parent = new_parent
+        ob.matrix_local = compensated_local
+        return True
+    except Exception:
+        try:
+            world_matrix = ob.matrix_world.copy()
+            ob.parent = new_parent
+            ob.matrix_world = world_matrix
+            return True
+        except Exception:
+            return False
+
+
 def remap_parents(mapping):
-    """Reparent objects whose parent is a mapping key onto the mapped target (keep world matrix)."""
+    """Reparent objects whose parent is a mapping key onto the mapped target."""
     if not mapping:
         return 0
     n = 0
@@ -578,13 +756,9 @@ def remap_parents(mapping):
             continue
         if new_parent is None or ob == new_parent:
             continue
-        world_matrix = ob.matrix_world.copy()
-        try:
-            ob.parent = new_parent
-            ob.matrix_world = world_matrix
+        old_parent = ob.parent
+        if reparent_preserve_world_path(ob, new_parent, old_parent=old_parent):
             n += 1
-        except Exception:
-            pass
     if n:
         print(f"[DLM remap] parents={n}")
     return n

@@ -993,6 +993,8 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
     from ..utils.remap_usages import (
         build_override_collection_object_map,
         override_root_collection,
+        reparent_preserve_world_path,
+        sync_prop_rep_from_orig,
     )
 
     # Full asset-instance map: RIG + GEO + Jiffy/helpers under the override root.
@@ -1002,6 +1004,8 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
         mapping.update(orig_to_rep)
     mapping.update(collection_map)
     mapping[orig] = rep
+
+    sync_prop_rep_from_orig(orig, rep)
 
     # Armature's own parent (cart/path empty) is MigObjRelatives — not duplicated here.
 
@@ -1023,14 +1027,15 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
     # like a pallet jack parented to the character (those must remapped to rep).
     candidates -= mapped_srcs
 
+    reparented = 0
     for ob in candidates:
         if ob.parent in mapping:
-            world_matrix = ob.matrix_world.copy()
-            ob.parent = mapping[ob.parent]
-            try:
-                ob.matrix_world = world_matrix
-            except Exception:
-                pass
+            old_parent = ob.parent
+            new_parent = mapping[ob.parent]
+            if reparent_preserve_world_path(ob, new_parent, old_parent=old_parent):
+                reparented += 1
+    if reparented:
+        print(f"[DLM RetargRelatives] reparented {reparented} object(s) with world-path preserve")
         if ob.modifiers:
             for m in ob.modifiers:
                 for attr in ("object", "target", "mirror_object"):
