@@ -373,14 +373,6 @@ class SymlinkPropagationApp(tk.Tk):
 
         cfg = load_ssh_config()
         self.stub_mode = tk.StringVar(value=self.session.get("stub_mode") or "copy")
-        subst_default = self.session.get("subst_drives")
-        if subst_default is None:
-            subst_default = any(
-                is_phantom_drive_letter(r.get("archaic_path") or "") for r in self.rows
-            )
-        self.subst_drives = tk.BooleanVar(value=bool(subst_default))
-        self.ssh_host = tk.StringVar(value=cfg.get("host") or "")
-        self.ssh_map_var = tk.StringVar(value=self._format_maps(cfg.get("unc_to_posix") or {}))
 
         self.search_roots: list[str] = list(self.session.get("search_roots") or [])
         self.rows: list[dict[str, Any]] = []
@@ -405,6 +397,15 @@ class SymlinkPropagationApp(tk.Tk):
             mp = by_arch.get(row["archaic_path"].upper(), "")
             if mp:
                 row["modern_path"] = mp
+
+        subst_default = self.session.get("subst_drives")
+        if subst_default is None:
+            subst_default = any(
+                is_phantom_drive_letter(r.get("archaic_path") or "") for r in self.rows
+            )
+        self.subst_drives = tk.BooleanVar(value=bool(subst_default))
+        self.ssh_host = tk.StringVar(value=cfg.get("host") or "")
+        self.ssh_map_var = tk.StringVar(value=self._format_maps(cfg.get("unc_to_posix") or {}))
 
         self._poll_after: str | None = None
         self._build()
