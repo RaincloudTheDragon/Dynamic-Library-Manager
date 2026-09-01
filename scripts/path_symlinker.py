@@ -10,6 +10,11 @@ Stub modes:
               auto fallback). Teardown only deletes if the file still matches the
               fingerprint recorded at create time.
 
+Windows subst (optional, wizard checkbox):
+  Maps phantom drive letters (e.g. unmapped ``T:``) to a session temp folder via
+  ``subst``, then native/copy stubs can be created under that letter. Teardown
+  runs ``subst X: /D`` only for letters recorded in the manifest.
+
 Never uses mklink /H.
 
 Exit codes: 0 all ok, 1 partial, 2 fatal.
@@ -33,8 +38,13 @@ if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
 from path_posix_map import (  # noqa: E402
+    drive_letter_from_path,
     is_network_path,
+    is_phantom_drive_letter,
+    is_subst_drive,
+    list_subst_mappings,
     load_ssh_config,
+    net_use_remote_for_letter,
     path_to_posix,
     shell_quote,
 )
@@ -735,6 +745,170 @@ def remove_linux_ssh_symlink(archaic_win: str, ssh: dict[str, Any]) -> tuple[boo
     return remove_linux_ssh_symlinks_batch([archaic_win], ssh)[0]
 
 
+def subst_target_for_letter(letter: str, session_dir: str) -> str:
+    """Local folder that will back a phantom drive letter via ``subst``."""
+    letter = (letter or "").strip().upper()
+    base = os.path.join(session_dir, "subst", letter)
+    return os.path.normpath(base)
+
+
+def ensure_subst_drive(letter: str, target: str) -> tuple[bool, str]:
+    """
+    Map *letter* to *target* with ``subst`` when the letter is not already usable.
+
+    Refuses real ``net use`` network mappings, foreign subst mappings, and existing
+    local volumes that are not our subst target.
+    """
+    if os.name != "nt":
+        return False, "subst is Windows-only"
+    letter = (letter or "").strip().upper()
+    if len(letter) != 1 or not letter.isalpha():
+        return False, f"invalid drive letter: {letter!r}"
+    target = os.path.normpath(norm(target)).rstrip("\\")
+    remote = net_use_remote_for_letter(letter)
+    if remote:
+        return (
+            False,
+            f"{letter}: is mapped to network share {remote} — use Linux SSH or map "
+            "the drive, not subst",
+        )
+    maps = list_subst_mappings()
+    cur = maps.get(letter)
+    target_u = target.upper()
+    if cur:
+        cur_u = norm(cur).rstrip("\\").upper()
+        if cur_u == target_u:
+            return True, f"subst {letter}: already active"
+        return False, f"{letter}: already subst'd to {cur} (conflicts with {target})"
+    root = f"{letter}:\\"
+    if os.path.isdir(root) and not is_subst_drive(letter):
+        return (
+            False,
+            f"{letter}: local drive already exists — subst not needed or unsafe",
+        )
+    try:
+        os.makedirs(target, exist_ok=True)
+    except OSError as e:
+        return False, f"mkdir subst target failed: {e}"
+    try:
+        r = subprocess.run(
+            ["cmd", "/c", "subst", f"{letter}:", target],
+            timeout=60,
+            **_hidden_run_kwargs(),
+        )
+    except Exception as e:
+        return False, f"subst failed: {e}"
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout or "").strip()
+        return False, f"subst failed ({r.returncode}): {err}"
+    if not os.path.isdir(root):
+        return False, f"subst reported ok but {root} is not visible"
+    return True, f"subst {letter}: -> {target}"
+
+
+def remove_subst_drive(letter: str, expected_target: str) -> tuple[bool, str]:
+    """``subst X: /D`` only when the current mapping matches *expected_target*."""
+    if os.name != "nt":
+        return True, "subst is Windows-only (no-op)"
+    letter = (letter or "").strip().upper()
+    expected = norm(expected_target).rstrip("\\").upper()
+    maps = list_subst_mappings()
+    cur = maps.get(letter)
+    if not cur:
+        _prune_subst_target_dir(expected_target)
+        return True, "subst already removed"
+    cur_u = norm(cur).rstrip("\\").upper()
+    if cur_u != expected:
+        return (
+            False,
+            f"refusing subst /D: {letter}: maps to {cur}, expected {expected_target}",
+        )
+    try:
+        r = subprocess.run(
+            ["cmd", "/c", "subst", f"{letter}:", "/D"],
+            timeout=60,
+            **_hidden_run_kwargs(),
+        )
+    except Exception as e:
+        return False, f"subst /D failed: {e}"
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout or "").strip()
+        return False, f"subst /D failed ({r.returncode}): {err}"
+    _prune_subst_target_dir(expected_target)
+    return True, f"removed subst {letter}:"
+
+
+def _prune_subst_target_dir(target: str) -> None:
+    """Remove empty subst backing folder (best-effort)."""
+    if not target:
+        return
+    cur = norm(target).rstrip("\\")
+    for _ in range(8):
+        if not cur or not os.path.isdir(cur):
+            break
+        try:
+            if os.listdir(cur):
+                break
+            os.rmdir(cur)
+        except OSError:
+            break
+        parent = os.path.dirname(cur)
+        if not parent or parent.upper() == cur.upper():
+            break
+        cur = parent
+
+
+def _setup_subst_for_pairs(
+    pairs: list[dict[str, Any]],
+    default_mode: str,
+    subst_drives: bool,
+    session_dir: str | None,
+    phantom_indices: set[int],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """
+    Ensure subst mappings for phantom letters referenced by *pairs*.
+
+    Returns (letter→target, letter→error) for letters that were needed.
+    """
+    subst_by_letter: dict[str, str] = {}
+    subst_errors: dict[str, str] = {}
+    if not subst_drives or os.name != "nt" or not session_dir or not phantom_indices:
+        return subst_by_letter, subst_errors
+
+    letters: set[str] = set()
+    for i in phantom_indices:
+        p = pairs[i]
+        mode = resolve_stub_mode(p, default_mode)
+        if mode == "linux_ssh":
+            continue
+        lt = drive_letter_from_path(p.get("archaic_path") or "")
+        if lt:
+            letters.add(lt)
+
+    for lt in sorted(letters):
+        tgt = subst_target_for_letter(lt, session_dir)
+        ok, msg = ensure_subst_drive(lt, tgt)
+        if ok:
+            subst_by_letter[lt] = tgt
+        else:
+            subst_errors[lt] = msg
+    return subst_by_letter, subst_errors
+
+
+def _manifest_with_subst(
+    base: dict[str, Any],
+    letter: str | None,
+    subst_by_letter: dict[str, str],
+) -> dict[str, Any]:
+    """Add subst manifest fields when the pair used a phantom letter mapping."""
+    if letter and letter in subst_by_letter:
+        out = dict(base)
+        out["subst_letter"] = letter
+        out["subst_target"] = subst_by_letter[letter]
+        return out
+    return base
+
+
 def resolve_stub_mode(pair: dict[str, Any], default_mode: str) -> str:
     mode = (pair.get("stub_mode") or default_mode or "copy").lower()
     if mode == "auto":
@@ -765,16 +939,29 @@ def run_create(
     manifest_file: str,
     ssh: dict[str, Any],
     default_mode: str = "copy",
+    subst_drives: bool = False,
+    session_dir: str | None = None,
 ) -> dict[str, Any]:
     created = []
     failed = []
     stubs = load_manifest(manifest_file)
     by_archaic = {norm(s["archaic_path"]).upper(): s for s in stubs}
 
+    phantom_indices: set[int] = set()
+    for i, p in enumerate(pairs):
+        archaic = p.get("archaic_path") or ""
+        mode = resolve_stub_mode(p, default_mode)
+        if mode != "linux_ssh" and is_phantom_drive_letter(archaic):
+            phantom_indices.add(i)
+
+    subst_by_letter, subst_errors = _setup_subst_for_pairs(
+        pairs, default_mode, subst_drives, session_dir, phantom_indices
+    )
+
     ssh_jobs: list[tuple[int, str, str]] = []  # index into work list
     work: list[dict[str, Any]] = []
 
-    for p in pairs:
+    for i, p in enumerate(pairs):
         archaic = p.get("archaic_path") or ""
         modern = p.get("modern_path") or ""
         mode = resolve_stub_mode(p, default_mode)
@@ -786,6 +973,25 @@ def run_create(
         }
         idx = len(work)
         work.append(entry)
+
+        letter = drive_letter_from_path(archaic)
+        if i in phantom_indices and mode != "linux_ssh":
+            if not subst_drives:
+                entry["message"] = (
+                    f"drive letter {letter}: is not mapped — enable "
+                    "'Subst unmapped drive letters' in the wizard"
+                )
+                failed.append(entry)
+                continue
+            if letter and letter in subst_errors:
+                entry["message"] = subst_errors[letter]
+                failed.append(entry)
+                continue
+            if letter and letter not in subst_by_letter:
+                entry["message"] = f"subst was not set up for drive {letter}:"
+                failed.append(entry)
+                continue
+
         if mode == "linux_ssh":
             ssh_jobs.append((idx, archaic, modern))
         elif mode == "copy":
@@ -793,11 +999,15 @@ def run_create(
             entry["message"] = msg
             if ok:
                 created.append(entry)
-                man = {
-                    "archaic_path": archaic,
-                    "modern_path": modern,
-                    "stub_mode": "copy",
-                }
+                man = _manifest_with_subst(
+                    {
+                        "archaic_path": archaic,
+                        "modern_path": modern,
+                        "stub_mode": "copy",
+                    },
+                    letter,
+                    subst_by_letter,
+                )
                 if fp:
                     man["copy_fingerprint"] = fp
                 by_archaic[norm(archaic).upper()] = man
@@ -808,11 +1018,15 @@ def run_create(
             entry["message"] = msg
             if ok:
                 created.append(entry)
-                by_archaic[norm(archaic).upper()] = {
-                    "archaic_path": archaic,
-                    "modern_path": modern,
-                    "stub_mode": mode,
-                }
+                by_archaic[norm(archaic).upper()] = _manifest_with_subst(
+                    {
+                        "archaic_path": archaic,
+                        "modern_path": modern,
+                        "stub_mode": mode,
+                    },
+                    letter,
+                    subst_by_letter,
+                )
             else:
                 failed.append(entry)
 
@@ -823,11 +1037,16 @@ def run_create(
             entry["message"] = msg
             if ok:
                 created.append(entry)
-                by_archaic[norm(entry["archaic_path"]).upper()] = {
-                    "archaic_path": entry["archaic_path"],
-                    "modern_path": entry["modern_path"],
-                    "stub_mode": entry["stub_mode"],
-                }
+                letter = drive_letter_from_path(entry["archaic_path"])
+                by_archaic[norm(entry["archaic_path"]).upper()] = _manifest_with_subst(
+                    {
+                        "archaic_path": entry["archaic_path"],
+                        "modern_path": entry["modern_path"],
+                        "stub_mode": entry["stub_mode"],
+                    },
+                    letter,
+                    subst_by_letter,
+                )
             else:
                 failed.append(entry)
 
@@ -846,6 +1065,7 @@ def run_teardown(
     removed = []
     failed = []
     remaining = {norm(s["archaic_path"]).upper(): s for s in stubs}
+    subst_teardown: dict[str, str] = {}
 
     ssh_idxs: list[int] = []
     work: list[dict[str, Any]] = []
@@ -871,6 +1091,10 @@ def run_teardown(
             entry["message"] = msg
             if ok:
                 removed.append(entry)
+                sl = man.get("subst_letter")
+                st = man.get("subst_target")
+                if sl and st:
+                    subst_teardown[str(sl).upper()] = st
                 remaining.pop(key, None)
             else:
                 failed.append(entry)
@@ -879,6 +1103,10 @@ def run_teardown(
             entry["message"] = msg
             if ok:
                 removed.append(entry)
+                sl = man.get("subst_letter")
+                st = man.get("subst_target")
+                if sl and st:
+                    subst_teardown[str(sl).upper()] = st
                 remaining.pop(key, None)
             else:
                 failed.append(entry)
@@ -890,11 +1118,35 @@ def run_teardown(
         for idx, (ok, msg) in zip(ssh_idxs, batch):
             entry = work[idx]
             entry["message"] = msg
+            key = norm(entry["archaic_path"]).upper()
+            man = remaining.get(key) or {}
             if ok:
                 removed.append(entry)
-                remaining.pop(norm(entry["archaic_path"]).upper(), None)
+                sl = man.get("subst_letter")
+                st = man.get("subst_target")
+                if sl and st:
+                    subst_teardown[str(sl).upper()] = st
+                remaining.pop(key, None)
             else:
                 failed.append(entry)
+
+    letters_still_used = {
+        str(s.get("subst_letter")).upper()
+        for s in remaining.values()
+        if s.get("subst_letter")
+    }
+    for letter, target in subst_teardown.items():
+        if letter in letters_still_used:
+            continue
+        ok, msg = remove_subst_drive(letter, target)
+        if not ok:
+            failed.append(
+                {
+                    "archaic_path": f"{letter}:\\",
+                    "stub_mode": "subst",
+                    "message": msg,
+                }
+            )
 
     save_manifest(manifest_file, list(remaining.values()))
     return {"removed": removed, "failed": failed}
@@ -918,6 +1170,8 @@ def main(argv: list[str] | None = None) -> int:
     pairs = list(payload.get("pairs") or [])
     ssh = merge_ssh(payload.get("ssh"))
     default_mode = (payload.get("stub_mode") or "copy").lower()
+    subst_drives = bool(payload.get("subst_drives"))
+    session_dir = payload.get("session_dir") or None
 
     if action == "teardown":
         out = run_teardown(pairs, args.manifest, ssh)
@@ -943,7 +1197,14 @@ def main(argv: list[str] | None = None) -> int:
                 },
             )
             return 1
-        out = run_create(pairs, args.manifest, ssh, default_mode=default_mode)
+        out = run_create(
+            pairs,
+            args.manifest,
+            ssh,
+            default_mode=default_mode,
+            subst_drives=subst_drives,
+            session_dir=session_dir,
+        )
         failed = out.get("failed") or []
         created = out.get("created") or []
         ok = len(failed) == 0 and len(created) > 0

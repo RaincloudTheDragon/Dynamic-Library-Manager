@@ -64,12 +64,21 @@ def _hidden_run_kwargs() -> dict:
     return kw
 
 
-def drive_letter_to_unc(win_path: str) -> str | None:
-    """Expand ``A:\\foo`` to ``\\\\SERVER\\share\\foo`` via ``net use``."""
+def drive_letter_from_path(win_path: str) -> str | None:
+    """Return ``T`` from ``T:\\foo`` or ``None`` for UNC / relative paths."""
     p = norm_win(win_path)
-    if len(p) < 2 or p[1] != ":":
+    if len(p) >= 2 and p[1] == ":" and p[0].isalpha():
+        return p[0].upper()
+    return None
+
+
+def net_use_remote_for_letter(letter: str) -> str | None:
+    """Return ``\\\\SERVER\\share`` when *letter* is mapped via ``net use``, else ``None``."""
+    if os.name != "nt":
         return None
-    letter = p[0].upper()
+    letter = (letter or "").strip().upper()
+    if len(letter) != 1 or not letter.isalpha():
+        return None
     try:
         r = subprocess.run(
             ["cmd", "/c", "net", "use", f"{letter}:"],
@@ -78,14 +87,82 @@ def drive_letter_to_unc(win_path: str) -> str | None:
         )
     except Exception:
         return None
-    remote = None
     for line in (r.stdout or "").splitlines():
         if "remote name" in line.lower():
             parts = line.split(None, 2)
             if len(parts) >= 3:
                 remote = parts[-1].strip()
+                if remote.startswith("\\\\"):
+                    return remote
             break
-    if not remote or not remote.startswith("\\\\"):
+    return None
+
+
+def list_subst_mappings() -> dict[str, str]:
+    """Parse ``subst`` output → ``{letter: target_path}`` (Windows only)."""
+    if os.name != "nt":
+        return {}
+    try:
+        r = subprocess.run(
+            ["cmd", "/c", "subst"],
+            timeout=30,
+            **_hidden_run_kwargs(),
+        )
+    except Exception:
+        return {}
+    out: dict[str, str] = {}
+    pat = re.compile(r"([A-Za-z]):\s*(?:\\:)?\s*=>\s*(.+?)\s*$")
+    for line in (r.stdout or "").splitlines():
+        m = pat.search(line.strip())
+        if not m:
+            continue
+        letter = m.group(1).upper()
+        target = norm_win(m.group(2).strip().strip('"'))
+        if target:
+            out[letter] = target
+    return out
+
+
+def is_subst_drive(letter: str) -> bool:
+    """True when *letter* is currently assigned via ``subst``."""
+    letter = (letter or "").strip().upper()
+    return letter in list_subst_mappings()
+
+
+def is_phantom_drive_letter(win_path: str) -> bool:
+    """
+    True when *win_path* uses a drive letter whose root is not usable locally.
+
+    Phantom letters (e.g. unmapped ``T:``) block native/copy stubs until ``subst``
+    maps the letter to a temp folder. Mapped ``net use`` drives and existing subst
+    letters are not phantom.
+    """
+    if os.name != "nt":
+        return False
+    letter = drive_letter_from_path(win_path)
+    if not letter:
+        return False
+    if net_use_remote_for_letter(letter):
+        return False
+    if letter in list_subst_mappings():
+        return False
+    root = f"{letter}:\\"
+    try:
+        if os.path.isdir(root):
+            return False
+    except OSError:
+        pass
+    return True
+
+
+def drive_letter_to_unc(win_path: str) -> str | None:
+    """Expand ``A:\\foo`` to ``\\\\SERVER\\share\\foo`` via ``net use``."""
+    p = norm_win(win_path)
+    if len(p) < 2 or p[1] != ":":
+        return None
+    letter = p[0].upper()
+    remote = net_use_remote_for_letter(letter)
+    if not remote:
         return None
     rest = p[2:].lstrip("\\")
     return remote.rstrip("\\") + (("\\" + rest) if rest else "")

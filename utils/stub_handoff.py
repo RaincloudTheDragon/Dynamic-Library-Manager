@@ -23,6 +23,7 @@ RESULT_NAME = "result.json"
 MANIFEST_NAME = "manifest.json"
 
 # opened → stubs_ready → apply_done → done
+# Session may also include subst_drives: bool (Windows phantom letter mapping).
 STATUS_OPENED = "opened"
 STATUS_STUBS_READY = "stubs_ready"
 STATUS_APPLY_DONE = "apply_done"

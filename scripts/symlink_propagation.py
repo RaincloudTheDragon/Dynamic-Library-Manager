@@ -69,6 +69,7 @@ if scripts_dir() not in sys.path:
 
 from path_posix_map import (  # noqa: E402
     auto_discover_maps,
+    is_phantom_drive_letter,
     load_ssh_config,
     save_ssh_config,
 )
@@ -80,6 +81,7 @@ def run_symlinker(
     session_dir: str,
     stub_mode: str = "copy",
     ssh: dict[str, Any] | None = None,
+    subst_drives: bool = False,
 ) -> dict[str, Any]:
     """Call path_symlinker via subprocess with payload next to the session."""
     payload_file = os.path.join(session_dir, "payload.json")
@@ -103,6 +105,8 @@ def run_symlinker(
             "action": action,
             "pairs": stub_pairs,
             "stub_mode": stub_mode,
+            "subst_drives": bool(subst_drives) if os.name == "nt" else False,
+            "session_dir": session_dir,
             "ssh": {
                 "host": ssh.get("host") or "",
                 "unc_to_posix": ssh.get("unc_to_posix") or {},
@@ -369,6 +373,12 @@ class SymlinkPropagationApp(tk.Tk):
 
         cfg = load_ssh_config()
         self.stub_mode = tk.StringVar(value=self.session.get("stub_mode") or "copy")
+        subst_default = self.session.get("subst_drives")
+        if subst_default is None:
+            subst_default = any(
+                is_phantom_drive_letter(r.get("archaic_path") or "") for r in self.rows
+            )
+        self.subst_drives = tk.BooleanVar(value=bool(subst_default))
         self.ssh_host = tk.StringVar(value=cfg.get("host") or "")
         self.ssh_map_var = tk.StringVar(value=self._format_maps(cfg.get("unc_to_posix") or {}))
 
@@ -457,6 +467,25 @@ class SymlinkPropagationApp(tk.Tk):
             "Teardown deletes the copy only if size+hash still match what we wrote — "
             "mismatch refuses delete.",
         )
+        if os.name == "nt":
+            subst_row = ttk.Frame(ssh_frame)
+            subst_row.pack(fill=tk.X, padx=4, pady=(0, 4))
+            cb_subst = ttk.Checkbutton(
+                subst_row,
+                text="Subst unmapped drive letters",
+                variable=self.subst_drives,
+            )
+            cb_subst.pack(side=tk.LEFT)
+            WidgetHoverTip(
+                cb_subst,
+                "When an archaic path uses a drive letter that is not mapped on this PC "
+                "(e.g. phantom T:\\...), map that letter to a temp folder under this "
+                "session via subst, then create Native or Copy stubs under it.\n\n"
+                "Does not apply to UNC paths (use Linux SSH). subst can target UNC on "
+                "Windows, but symlinks on network shares remain unreliable — this "
+                "option is for missing local letters only.\n\n"
+                "Teardown runs subst X: /D only for letters this wizard created.",
+            )
         host_row = ttk.Frame(ssh_frame)
         host_row.pack(fill=tk.X, padx=4, pady=2)
         ttk.Label(host_row, text="SSH host").pack(side=tk.LEFT)
@@ -897,7 +926,14 @@ class SymlinkPropagationApp(tk.Tk):
         if ssh.get("host"):
             save_ssh_config({"host": ssh["host"], "unc_to_posix": ssh.get("unc_to_posix") or {}})
 
-        result = run_symlinker("create", pairs, self.session_dir, stub_mode=mode, ssh=ssh)
+        result = run_symlinker(
+            "create",
+            pairs,
+            self.session_dir,
+            stub_mode=mode,
+            ssh=ssh,
+            subst_drives=self.subst_drives.get(),
+        )
         failed = result.get("failed") or []
         created = result.get("created") or []
         if not result.get("ok") and not created:
@@ -942,6 +978,7 @@ class SymlinkPropagationApp(tk.Tk):
         self.session["pairs"] = ready_pairs
         self.session["status"] = STATUS_STUBS_READY
         self.session["stub_mode"] = mode
+        self.session["subst_drives"] = bool(self.subst_drives.get())
         self.session["message"] = f"created={len(created)} failed={len(failed)}"
         self.session["search_roots"] = list(self.search_roots)
         save_session(self.session_file, self.session)
@@ -998,6 +1035,7 @@ class SymlinkPropagationApp(tk.Tk):
             self.session_dir,
             stub_mode=self.session.get("stub_mode") or self.stub_mode.get() or "copy",
             ssh=self._ssh_payload(),
+            subst_drives=bool(self.session.get("subst_drives")),
         )
         failed = result.get("failed") or []
         self.session["status"] = STATUS_DONE
