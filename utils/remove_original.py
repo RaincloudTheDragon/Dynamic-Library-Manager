@@ -57,6 +57,27 @@ def _collection_contains_object_recursive(coll, ob):
     return False
 
 
+def _object_in_inscene_collection_instance(ob):
+    """
+    True when *ob* lives inside any collection instanced by an in-scene empty.
+
+    Characters inside ``induct_characters`` (and similar setups) have
+    ``users_scene == 0`` on their armatures even though the instance empty is
+    in the scene. Remove Original must not treat them as ghost leftovers.
+    """
+    if ob is None:
+        return False
+    for scene_ob in bpy.data.objects:
+        if not scene_ob.users_scene:
+            continue
+        inst_coll = getattr(scene_ob, "instance_collection", None)
+        if inst_coll is None:
+            continue
+        if _collection_contains_object_recursive(inst_coll, ob):
+            return True
+    return False
+
+
 def _deepest_users_collection(scene, armature):
     """Among armature.users_collection, pick the most nested (max depth) as the inner anchor."""
     colls = list(getattr(armature, "users_collection", []) or [])
@@ -221,6 +242,17 @@ def _scene_users_of_library(filepath):
             continue
         if _id_belongs_to_library(ob, filepath) or _id_belongs_to_library(getattr(ob, "data", None), filepath):
             hits.append(f"object:{ob.name}")
+        inst_coll = getattr(ob, "instance_collection", None)
+        if inst_coll is None:
+            continue
+        if _id_belongs_to_library(inst_coll, filepath):
+            hits.append(f"instance:{ob.name} -> {inst_coll.name}")
+            continue
+        for nested in _all_objects_in_collection(inst_coll):
+            if _id_belongs_to_library(nested, filepath) or _id_belongs_to_library(
+                getattr(nested, "data", None), filepath
+            ):
+                hits.append(f"instanced:{nested.name} via {ob.name}")
     return hits
 
 
@@ -391,7 +423,7 @@ def remove_unused_override_armatures(keep=None, keep_ids=None):
     for ob in bpy.data.objects:
         if ob.library or not is_library_override_id(ob):
             continue
-        if not ob.users_scene and ob not in protected:
+        if not (ob.users_scene or _object_in_inscene_collection_instance(ob) or ob in protected):
             continue
         ref = _override_reference(ob)
         if ref is not None:
@@ -402,7 +434,7 @@ def remove_unused_override_armatures(keep=None, keep_ids=None):
             continue
         if not getattr(ob, "override_library", None):
             continue
-        if ob.users_scene:
+        if ob.users_scene or _object_in_inscene_collection_instance(ob):
             continue
         ref = _override_reference(ob)
         if ref is not None and ref in live_refs:
