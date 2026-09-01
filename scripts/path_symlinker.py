@@ -736,7 +736,7 @@ def remove_linux_ssh_symlink(archaic_win: str, ssh: dict[str, Any]) -> tuple[boo
 
 
 def resolve_stub_mode(pair: dict[str, Any], default_mode: str) -> str:
-    mode = (pair.get("stub_mode") or default_mode or "auto").lower()
+    mode = (pair.get("stub_mode") or default_mode or "copy").lower()
     if mode == "auto":
         archaic = pair.get("archaic_path") or ""
         # Never auto-pick copy — that is an explicit catch-all only.
@@ -764,7 +764,7 @@ def run_create(
     pairs: list[dict[str, Any]],
     manifest_file: str,
     ssh: dict[str, Any],
-    default_mode: str = "auto",
+    default_mode: str = "copy",
 ) -> dict[str, Any]:
     created = []
     failed = []
@@ -857,7 +857,7 @@ def run_teardown(
         mode = (
             p.get("stub_mode")
             or man.get("stub_mode")
-            or "auto"
+            or "copy"
         )
         if mode == "auto":
             mode = "linux_ssh" if is_network_path(archaic) else "native"
@@ -917,7 +917,7 @@ def main(argv: list[str] | None = None) -> int:
     action = (payload.get("action") or "create").lower()
     pairs = list(payload.get("pairs") or [])
     ssh = merge_ssh(payload.get("ssh"))
-    default_mode = (payload.get("stub_mode") or "auto").lower()
+    default_mode = (payload.get("stub_mode") or "copy").lower()
 
     if action == "teardown":
         out = run_teardown(pairs, args.manifest, ssh)

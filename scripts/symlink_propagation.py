@@ -78,7 +78,7 @@ def run_symlinker(
     action: str,
     pairs: list[dict[str, Any]],
     session_dir: str,
-    stub_mode: str = "auto",
+    stub_mode: str = "copy",
     ssh: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Call path_symlinker via subprocess with payload next to the session."""
@@ -368,7 +368,7 @@ class SymlinkPropagationApp(tk.Tk):
         self.minsize(720, 480)
 
         cfg = load_ssh_config()
-        self.stub_mode = tk.StringVar(value=self.session.get("stub_mode") or "auto")
+        self.stub_mode = tk.StringVar(value=self.session.get("stub_mode") or "copy")
         self.ssh_host = tk.StringVar(value=cfg.get("host") or "")
         self.ssh_map_var = tk.StringVar(value=self._format_maps(cfg.get("unc_to_posix") or {}))
 
@@ -434,7 +434,10 @@ class SymlinkPropagationApp(tk.Tk):
             "Walk search roots for exact basename matches. Skips folder names starting with '.'.",
         )
 
-        ssh_frame = ttk.LabelFrame(top, text="Stub mode (network shares need Linux SSH)")
+        ssh_frame = ttk.LabelFrame(
+            top,
+            text="Stub mode (symlinks on network shares hosted on a Linux machine require SSH to that host)",
+        )
         ssh_frame.pack(fill=tk.X, pady=6)
         mode_row = ttk.Frame(ssh_frame)
         mode_row.pack(fill=tk.X, padx=4, pady=2)
@@ -799,7 +802,7 @@ class SymlinkPropagationApp(tk.Tk):
         self._refresh_tree()
 
     def _pairs_from_rows(self) -> list[dict[str, Any]]:
-        mode = self.stub_mode.get() or "auto"
+        mode = self.stub_mode.get() or "copy"
         return [
             {
                 "archaic_path": r["archaic_path"],
@@ -862,7 +865,7 @@ class SymlinkPropagationApp(tk.Tk):
             ):
                 return
 
-        mode = self.stub_mode.get() or "auto"
+        mode = self.stub_mode.get() or "copy"
         if mode == "copy":
             if not messagebox.askyesno(
                 "Copy stubs",
@@ -993,7 +996,7 @@ class SymlinkPropagationApp(tk.Tk):
             "teardown",
             pairs,
             self.session_dir,
-            stub_mode=self.session.get("stub_mode") or self.stub_mode.get() or "auto",
+            stub_mode=self.session.get("stub_mode") or self.stub_mode.get() or "copy",
             ssh=self._ssh_payload(),
         )
         failed = result.get("failed") or []
