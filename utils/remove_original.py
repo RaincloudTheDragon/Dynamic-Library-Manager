@@ -115,8 +115,12 @@ def resolve_collection_for_remove_original(orig, rig_family, scene, rep=None):
     """
     Return a collection to remove for Remove Original, or None to fall back to object-only removal.
 
-    Walks up from the deepest users_collection so nested linked rigs remove the outer instance,
-    not an inner linked child collection.
+    For library overrides, prefer the override asset root (``override_library.hierarchy_root``
+    collection, e.g. ``Regina``) — not a local staging collection (``Props``, ``Body``) that also
+    lists the same objects twice in the outliner.
+
+    Otherwise walks up from the deepest users_collection so nested linked rigs remove the outer
+    instance, not an inner linked child collection.
 
     If rep is the replacement armature, never remove a collection whose subtree contains rep
     (avoids deleting both characters when they share a parent collection).
@@ -125,6 +129,16 @@ def resolve_collection_for_remove_original(orig, rig_family, scene, rep=None):
     """
     if not orig or orig.type != "ARMATURE" or orig.name not in bpy.data.objects:
         return None
+
+    from .remap_usages import _override_asset_root_for_armature, is_library_override_id
+
+    if is_library_override_id(orig):
+        asset_root = _override_asset_root_for_armature(orig, scene)
+        if asset_root is not None:
+            if rep is None or rep.name not in bpy.data.objects:
+                return asset_root
+            if not _collection_contains_object_recursive(asset_root, rep):
+                return asset_root
 
     inner = _deepest_users_collection(scene, orig)
     if inner is None:
@@ -415,22 +429,74 @@ def _unlink_collection_from_parents(coll):
             pass
 
 
+def _objects_in_override_hierarchy(orig):
+    """All objects sharing orig's override hierarchy_root (full linked asset instance)."""
+    if orig is None:
+        return set()
+    ol = getattr(orig, "override_library", None)
+    if ol is None or getattr(ol, "hierarchy_root", None) is None:
+        return {orig}
+    hr = ol.hierarchy_root
+    out = set()
+    for ob in bpy.data.objects:
+        ool = getattr(ob, "override_library", None)
+        if ool is not None and ool.hierarchy_root == hr:
+            out.add(ob)
+    return out
+
+
+def _unlink_object_from_local_collections(ob, keep_coll):
+    """
+    Drop *ob* from local staging collections only.
+
+    Override collections (and nested override subtrees) are kept so templates survive.
+    Fixes outliner duplicates when the same override object is also linked under Props/Body.
+    """
+    if ob is None:
+        return
+    for uc in list(getattr(ob, "users_collection", []) or []):
+        if uc == keep_coll:
+            continue
+        if getattr(uc, "override_library", None) is not None:
+            continue
+        try:
+            uc.objects.unlink(ob)
+        except Exception:
+            pass
+
+
 def _remove_orig_sibling_override_instance(orig, coll, report):
     """
     Hide the orig override instance from the scene without deleting any IDs.
 
     Sibling overrides (Regina / Regina.001) share linked override templates.
     Deleting orig override objects — or their datablocks — breaks the rep on
-    save/reload. Unlink the root collection and hide its objects instead.
+    save/reload. Unlink the override root collection and hide its hierarchy;
+    also unlink objects from local staging collections that duplicate outliner entries.
     """
     from .remap_usages import object_in_collection_tree
 
-    coll_name = coll.name
-    _unlink_collection_from_parents(coll)
+    coll_name = coll.name if coll else "(none)"
+    if coll is not None:
+        _unlink_collection_from_parents(coll)
+
+    hierarchy = _objects_in_override_hierarchy(orig)
+    coll_objects = _all_objects_in_collection(coll) if coll else set()
+    targets = hierarchy if hierarchy else coll_objects
+    if orig is not None:
+        targets = set(targets)
+        targets.add(orig)
+
     hidden = 0
-    for ob in _all_objects_in_collection(coll):
+    for ob in targets:
+        _unlink_object_from_local_collections(ob, coll)
         parent = ob.parent
-        if parent is not None and not object_in_collection_tree(parent, coll):
+        if (
+            parent is not None
+            and coll is not None
+            and not object_in_collection_tree(parent, coll)
+            and parent not in targets
+        ):
             try:
                 ob.parent = None
             except Exception:
@@ -441,18 +507,7 @@ def _remove_orig_sibling_override_instance(orig, coll, report):
             hidden += 1
         except Exception:
             pass
-    if orig is not None and orig not in _all_objects_in_collection(coll):
-        if orig.parent is not None:
-            try:
-                orig.parent = None
-            except Exception:
-                pass
-        try:
-            orig.hide_viewport = True
-            orig.hide_render = True
-            hidden += 1
-        except Exception:
-            pass
+
     if report:
         report(
             {"INFO"},
