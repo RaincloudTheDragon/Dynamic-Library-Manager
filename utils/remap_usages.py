@@ -594,6 +594,47 @@ def _new_parent_matrix_for_reparent(new_parent, old_parent):
     return new_parent.matrix_world.copy()
 
 
+def _child_parent_space_matrix(parent, child, *, old_parent=None):
+    """
+    Evaluated parenting space for *child* under *parent*.
+
+    Bone-parented children use ``parent.mw @ pose_bone.matrix``; object parents use
+    the usual object matrix (with scale normalization when *old_parent* is scaled).
+    """
+    if (
+        getattr(child, "parent_type", "OBJECT") == "BONE"
+        and getattr(child, "parent_bone", "")
+        and getattr(parent, "type", None) == "ARMATURE"
+        and getattr(parent, "pose", None) is not None
+    ):
+        pb = parent.pose.bones.get(child.parent_bone)
+        if pb is not None:
+            if old_parent is not None and _has_non_unit_scale(old_parent):
+                if _has_non_unit_scale(parent):
+                    parent.scale = (1.0, 1.0, 1.0)
+                arm_mw = _matrix_world_loc_rot_only(parent)
+            else:
+                arm_mw = parent.matrix_world.copy()
+            return arm_mw @ pb.matrix
+    if old_parent is not None:
+        return _new_parent_matrix_for_reparent(parent, old_parent)
+    return parent.matrix_world.copy()
+
+
+def _set_keyframe_value(kp, new_y: float) -> None:
+    """Set key value and shift Bezier handles by the same delta (avoids mid-curve zoops)."""
+    old_y = kp.co.y
+    delta = new_y - old_y
+    if abs(delta) < 1e-12:
+        return
+    kp.co.y = new_y
+    try:
+        kp.handle_left.y += delta
+        kp.handle_right.y += delta
+    except Exception:
+        pass
+
+
 def _iter_action_fcurves(action):
     """Yield f-curves from legacy actions and Blender 5 action layers."""
     if action is None:
@@ -619,10 +660,32 @@ def transform_object_action_for_reparent(ob, old_parent, new_parent) -> bool:
     a scaled orig prop. RetargRelatives reparents them onto a unit-scale rep; without
     retargeting the curves, evaluated locals stay in the old parent space and hands
     follow grabbers meters off the mesh when scrubbing.
+
+    Bone-parented children whose bone exists on both armatures keep their action as-is
+    (keys are already bone-local). Bezier handles are shifted with any rewritten value
+    so mid-range scrub does not zoop from stale handle positions.
     """
     ad = getattr(ob, "animation_data", None)
     if ad is None or ad.action is None or old_parent is None or new_parent is None:
         return False
+
+    # Same bone on both armatures: location keys are already in that bone's space.
+    if (
+        getattr(ob, "parent_type", "OBJECT") == "BONE"
+        and getattr(ob, "parent_bone", "")
+        and getattr(old_parent, "type", None) == "ARMATURE"
+        and getattr(new_parent, "type", None) == "ARMATURE"
+        and ob.parent_bone in getattr(old_parent.pose, "bones", {})
+        and ob.parent_bone in getattr(new_parent.pose, "bones", {})
+        and not _has_non_unit_scale(old_parent)
+        and not _has_non_unit_scale(new_parent)
+    ):
+        print(
+            f"[DLM remap] skip action retarget on {ob.name!r} "
+            f"(bone parent {ob.parent_bone!r} on both armatures)"
+        )
+        return False
+
     fcurves = list(_iter_action_fcurves(ad.action))
     if not fcurves:
         return False
@@ -640,8 +703,8 @@ def transform_object_action_for_reparent(ob, old_parent, new_parent) -> bool:
         for t in times:
             scene.frame_set(int(t))
             view_layer.update()
-            old_mw = old_parent.matrix_world.copy()
-            new_mw = _new_parent_matrix_for_reparent(new_parent, old_parent)
+            old_mw = _child_parent_space_matrix(old_parent, ob)
+            new_mw = _child_parent_space_matrix(new_parent, ob, old_parent=old_parent)
             local_by_time[t] = new_mw.inverted() @ old_mw @ ob.matrix_local.copy()
 
         for fc in fcurves:
@@ -652,13 +715,13 @@ def transform_object_action_for_reparent(ob, old_parent, new_parent) -> bool:
                 if local_new is None:
                     continue
                 if path == "location":
-                    kp.co.y = local_new.to_translation()[idx]
+                    _set_keyframe_value(kp, local_new.to_translation()[idx])
                 elif path == "rotation_euler":
-                    kp.co.y = local_new.to_euler(rot_mode)[idx]
+                    _set_keyframe_value(kp, local_new.to_euler(rot_mode)[idx])
                 elif path == "rotation_quaternion":
-                    kp.co.y = local_new.to_quaternion()[idx]
+                    _set_keyframe_value(kp, local_new.to_quaternion()[idx])
                 elif path == "scale":
-                    kp.co.y = local_new.to_scale()[idx]
+                    _set_keyframe_value(kp, local_new.to_scale()[idx])
             if hasattr(fc, "update"):
                 fc.update()
 
@@ -708,7 +771,8 @@ def reparent_preserve_world_path(ob, new_parent, old_parent=None):
     """
     Reparent *ob* onto *new_parent* so its world motion matches the old parent chain.
 
-    Blender uses ``matrix_world = parent.matrix_world @ matrix_local``.
+    Blender uses ``matrix_world = parent.matrix_world @ matrix_local`` (object parent)
+    or ``parent.mw @ pose_bone.matrix @ …`` (bone parent).
 
     Prop migration often copies orig scale onto rep (CopyAttr), then RetargRelatives
     reparents grabbers while scales still match. When rep scale is cleared to
@@ -723,20 +787,51 @@ def reparent_preserve_world_path(ob, new_parent, old_parent=None):
     old_parent = old_parent if old_parent is not None else ob.parent
     if old_parent is None or new_parent is None or ob == new_parent:
         return False
+    parent_type = getattr(ob, "parent_type", "OBJECT")
+    parent_bone = getattr(ob, "parent_bone", "") or ""
     try:
+        # Preserve bone-local basis/inverse when staying on the same bone name —
+        # object-space compensation fights keyed bone-local location.
+        same_bone = (
+            parent_type == "BONE"
+            and parent_bone
+            and getattr(old_parent, "type", None) == "ARMATURE"
+            and getattr(new_parent, "type", None) == "ARMATURE"
+            and parent_bone in old_parent.pose.bones
+            and parent_bone in new_parent.pose.bones
+        )
+        if same_bone:
+            mpi = ob.matrix_parent_inverse.copy()
+            basis = ob.matrix_basis.copy()
+            transform_object_action_for_reparent(ob, old_parent, new_parent)
+            ob.parent = new_parent
+            ob.parent_type = "BONE"
+            ob.parent_bone = parent_bone
+            ob.matrix_parent_inverse = mpi
+            ob.matrix_basis = basis
+            return True
+
         transform_object_action_for_reparent(ob, old_parent, new_parent)
 
         old_local = ob.matrix_local.copy()
-        old_parent_mw = old_parent.matrix_world.copy()
-        new_parent_mw = _new_parent_matrix_for_reparent(new_parent, old_parent)
+        old_parent_mw = _child_parent_space_matrix(old_parent, ob)
+        new_parent_mw = _child_parent_space_matrix(
+            new_parent, ob, old_parent=old_parent
+        )
         compensated_local = new_parent_mw.inverted() @ old_parent_mw @ old_local
         ob.parent = new_parent
+        ob.parent_type = parent_type
+        if parent_type == "BONE" and parent_bone:
+            ob.parent_bone = parent_bone
         ob.matrix_local = compensated_local
         return True
     except Exception:
         try:
             world_matrix = ob.matrix_world.copy()
             ob.parent = new_parent
+            ob.parent_type = parent_type
+            if parent_type == "BONE" and parent_bone:
+                ob.parent_bone = parent_bone
             ob.matrix_world = world_matrix
             return True
         except Exception:
