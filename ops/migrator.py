@@ -912,6 +912,17 @@ def run_mig_obj_relatives(orig, rep, orig_to_rep, scene=None):
         and not object_in_collection_tree(new_parent, rep_root)
     )
 
+    # Blender parenting: world = parent @ matrix_parent_inverse @ matrix_basis.
+    # Child Of uses the same product when inverse_matrix == matrix_parent_inverse.
+    # Using parent^-1 + matrix_world snap looks right for one depsgraph update, then
+    # keyed location channels restore parent-local basis and the character flips back.
+    try:
+        parent_inverse = orig.matrix_parent_inverse.copy()
+        basis = orig.matrix_basis.copy()
+    except Exception:
+        parent_inverse = None
+        basis = None
+
     if use_child_of:
         if rep.parent is not None:
             rep.parent = None
@@ -924,9 +935,19 @@ def run_mig_obj_relatives(orig, rep, orig_to_rep, scene=None):
         if orig.parent_type == "BONE" and orig.parent_bone:
             nc.subtarget = orig.parent_bone
         nc.influence = 1.0
-        # Rainys BST: inverse = target^-1, then restore world matrix.
-        nc.inverse_matrix = new_parent.matrix_world.inverted()
-        rep.matrix_world = world_matrix
+        if parent_inverse is not None and new_parent == orig.parent:
+            nc.inverse_matrix = parent_inverse
+        elif basis is not None:
+            # Retargeted parent: keep orig world with the same keyed basis.
+            nc.inverse_matrix = (
+                new_parent.matrix_world.inverted() @ world_matrix @ basis.inverted()
+            )
+        else:
+            nc.inverse_matrix = new_parent.matrix_world.inverted()
+        if basis is not None:
+            rep.matrix_basis = basis
+        else:
+            rep.matrix_world = world_matrix
         print(
             f"[DLM MigObjRelatives] {orig.name!r}->{rep.name!r}: "
             f"Child Of {new_parent.name!r} (override-safe)"
@@ -937,7 +958,12 @@ def run_mig_obj_relatives(orig, rep, orig_to_rep, scene=None):
     rep.parent_type = orig.parent_type
     rep.parent_bone = orig.parent_bone
     try:
-        rep.matrix_world = world_matrix
+        if parent_inverse is not None:
+            rep.matrix_parent_inverse = parent_inverse
+        if basis is not None:
+            rep.matrix_basis = basis
+        else:
+            rep.matrix_world = world_matrix
     except Exception:
         try:
             rep.matrix_parent_inverse = orig.matrix_parent_inverse.copy()
