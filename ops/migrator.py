@@ -1349,6 +1349,7 @@ def run_full_prop_migration(context):
 def run_remove_original_prop(context, orig, rep, report=None):
     """Remap refs orig→rep, unlink/delete orig prop object, clear original_prop."""
     from ..utils.remap_usages import remap_object_usages, remap_parents
+    from ..utils.remove_original import _rename_rep_actions
 
     if not orig or orig.name not in bpy.data.objects:
         if report:
@@ -1394,6 +1395,10 @@ def run_remove_original_prop(context, orig, rep, report=None):
     props = getattr(context.scene, "dynamic_link_manager", None)
     if props is not None:
         props.original_prop = None
+
+    renamed = _rename_rep_actions(rep)
+    if renamed and report:
+        report({"INFO"}, f"Renamed {len(renamed)} replacement action(s)")
 
     if report:
         mode = "soft-unlinked" if is_override else "deleted"

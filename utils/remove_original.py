@@ -812,7 +812,15 @@ def _rename_rep_actions(rep):
         if action is None or ".rep" not in action.name:
             return None
         old = action.name
-        action.name = old.replace(".rep", "")
+        new_name = old.replace(".rep", "")
+        # Leftover unused orig action often still holds the target name.
+        existing = bpy.data.actions.get(new_name)
+        if existing is not None and existing != action and getattr(existing, "users", 0) == 0:
+            try:
+                bpy.data.actions.remove(existing)
+            except Exception:
+                pass
+        action.name = new_name
         return f"{old} -> {action.name}"
 
     msg = _strip_rep(ad.action)
