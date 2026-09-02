@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -54,6 +55,35 @@ def save_session(path: str, data: dict[str, Any]) -> None:
     data = dict(data)
     data["updated_at"] = time.time()
     write_json(path, data)
+
+
+def center_window(win: tk.Misc, width: int | None = None, height: int | None = None) -> None:
+    """Place *win* at the center of the primary screen."""
+    win.update_idletasks()
+    w = int(width if width is not None else max(win.winfo_width(), win.winfo_reqwidth()))
+    h = int(height if height is not None else max(win.winfo_height(), win.winfo_reqheight()))
+    sw = win.winfo_screenwidth()
+    sh = win.winfo_screenheight()
+    x = max(0, (sw - w) // 2)
+    y = max(0, (sh - h) // 2)
+    win.geometry(f"{w}x{h}+{x}+{y}")
+
+
+def screen_center_parent(master: tk.Misc) -> tk.Toplevel:
+    """Invisible 1x1 window at screen center so modal dialogs spawn there."""
+    anchor = tk.Toplevel(master)
+    anchor.withdraw()
+    anchor.overrideredirect(True)
+    sw = master.winfo_screenwidth()
+    sh = master.winfo_screenheight()
+    anchor.geometry(f"1x1+{max(0, sw // 2)}+{max(0, sh // 2)}")
+    try:
+        anchor.transient(master)
+    except tk.TclError:
+        pass
+    anchor.deiconify()
+    anchor.update_idletasks()
+    return anchor
 
 
 def scripts_dir() -> str:
@@ -165,15 +195,31 @@ def related_basenames(basename: str) -> list[str]:
     return out
 
 
+# Leading archive stamp on the filename: 2025.06.11.14.42.14_Name.blend
+_TS_PREFIX_NAME = re.compile(
+    r"^(?P<ts>\d{4}(?:[.\-_]\d{2}){2,5})_(?P<rest>.+)$",
+    re.IGNORECASE,
+)
+
+
+def _filename_matches_related(filename: str, related_lowers: set[str]) -> bool:
+    """Exact related name, or date-stamped prefix then the related basename."""
+    key = filename.lower()
+    if key in related_lowers:
+        return True
+    m = _TS_PREFIX_NAME.match(filename)
+    if m and m.group("rest").lower() in related_lowers:
+        return True
+    return False
+
+
 def find_basenames(roots: list[str], basenames: set[str]) -> dict[str, list[str]]:
-    """Walk roots for matching .blend basenames; skip directory names starting with '.'."""
-    # lower filename -> original request basenames that accept this hit (exact + baked sibling)
-    wanted: dict[str, list[str]] = {}
+    """Walk roots for matching .blend names; skip directory names starting with '.'."""
+    related_by_want: dict[str, set[str]] = {}
     for b in basenames:
         if not b:
             continue
-        for rel in related_basenames(b):
-            wanted.setdefault(rel.lower(), []).append(b)
+        related_by_want[b] = {r.lower() for r in related_basenames(b)}
     hits: dict[str, list[str]] = {b: [] for b in basenames}
     for root in roots:
         if not root or not os.path.isdir(root):
@@ -181,28 +227,109 @@ def find_basenames(roots: list[str], basenames: set[str]) -> dict[str, list[str]
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if not d.startswith(".")]
             for name in filenames:
-                key = name.lower()
-                if key not in wanted:
+                if not name.lower().endswith(".blend"):
                     continue
                 full = os.path.normpath(os.path.join(dirpath, name))
-                for original in wanted[key]:
-                    if original in hits and full not in hits[original]:
-                        hits[original].append(full)
+                for want, related in related_by_want.items():
+                    if not _filename_matches_related(name, related):
+                        continue
+                    if full not in hits[want]:
+                        hits[want].append(full)
     return hits
 
 
+# Date-like folder/filename stamps (YYYY-MM-DD, YYYY_MM_DD, YYYYMMDD, YYYY.MM.DD[.HH.MM.SS]).
+_DATE_SEG_DASH = re.compile(
+    r"^(?P<y>\d{4})[-_](?P<m>\d{2})[-_](?P<d>\d{2})"
+    r"(?:[-_T](?P<h>\d{2})[-_:]?(?P<mi>\d{2})(?:[-_:]?(?P<s>\d{2}))?)?$"
+)
+_DATE_SEG_DOTTED = re.compile(
+    r"^(?P<y>\d{4})\.(?P<m>\d{2})\.(?P<d>\d{2})"
+    r"(?:\.(?P<h>\d{2})\.(?P<mi>\d{2})(?:\.(?P<s>\d{2}))?)?$"
+)
+_DATE_SEG_COMPACT = re.compile(
+    r"^(?P<ymd>\d{8})"
+    r"(?:[-_](?P<h>\d{2})[-_]?(?P<mi>\d{2})(?:[-_]?(?P<s>\d{2}))?)?$"
+)
+
+
+def _date_parts_to_key(y: int, mo: int, d: int, h: int = 0, mi: int = 0, s: int = 0) -> int:
+    if not (1 <= mo <= 12 and 1 <= d <= 31):
+        return 0
+    return y * 10_000_000_000 + mo * 100_000_000 + d * 1_000_000 + h * 10_000 + mi * 100 + s
+
+
+def _parse_date_segment(name: str) -> int:
+    """Return YYYYMMDDHHMMSS int for a date-like name/stamp, else 0."""
+    if not name:
+        return 0
+    m = _DATE_SEG_DOTTED.match(name) or _DATE_SEG_DASH.match(name)
+    if m:
+        return _date_parts_to_key(
+            int(m.group("y")),
+            int(m.group("m")),
+            int(m.group("d")),
+            int(m.group("h") or 0),
+            int(m.group("mi") or 0),
+            int(m.group("s") or 0),
+        )
+    m = _DATE_SEG_COMPACT.match(name)
+    if m:
+        ymd = m.group("ymd")
+        return _date_parts_to_key(
+            int(ymd[:4]),
+            int(ymd[4:6]),
+            int(ymd[6:8]),
+            int(m.group("h") or 0),
+            int(m.group("mi") or 0),
+            int(m.group("s") or 0),
+        )
+    return 0
+
+
+def path_date_sort_key(path: str) -> int:
+    """Newest date-like folder segment or filename stamp as YYYYMMDDHHMMSS, or 0."""
+    best = 0
+    norm = path.replace("/", "\\")
+    for part in norm.split("\\"):
+        key = _parse_date_segment(part)
+        if key > best:
+            best = key
+    base = os.path.basename(norm)
+    m = _TS_PREFIX_NAME.match(base)
+    if m:
+        key = _parse_date_segment(m.group("ts"))
+        if key > best:
+            best = key
+    return best
+
+
+def _is_timestamp_prefixed_basename(filename: str, want_basename: str) -> bool:
+    """True if filename is date-stamp_want (same stem as want, not exact name)."""
+    if not want_basename or filename.lower() == want_basename.lower():
+        return False
+    m = _TS_PREFIX_NAME.match(filename)
+    if not m:
+        return False
+    return m.group("rest").lower() == want_basename.lower()
+
+
 def rank_modern_hits(candidates: list[str], *, want_basename: str = "") -> list[str]:
-    """Prefer exact basename, then AssetArchive / non-nested over live project trees."""
+    """Prefer exact basename, date-stamped filename matches, layout heuristics, newer stamps."""
 
     want = (want_basename or "").lower()
 
     def score(path: str) -> tuple:
         u = path.replace("/", "\\").upper()
-        base = os.path.basename(path).lower()
+        base = os.path.basename(path)
+        base_l = base.lower()
         # Higher is better.
         s = 0
-        if want and base == want:
+        if want and base_l == want:
             s += 200
+        elif want and _is_timestamp_prefixed_basename(base, want):
+            # Date-stamped archive copy of the same basename.
+            s += 160
         elif want:
             # Related baked/unbaked sibling — keep visible but below exact.
             s += 40
@@ -219,7 +346,8 @@ def rank_modern_hits(candidates: list[str], *, want_basename: str = "") -> list[
                     s -= 50
             except ValueError:
                 pass
-        return (s, -len(path))
+        # Prefer newer date-stamped folder/filename segments when basenames collide.
+        return (s, path_date_sort_key(path), -len(path))
 
     return sorted(candidates, key=score, reverse=True)
 
@@ -368,7 +496,7 @@ class SymlinkPropagationApp(tk.Tk):
         self.session_dir = os.path.dirname(session_file)
         self.session = load_session(session_file)
         self.title("Symlink Propagation")
-        self.geometry("980x640")
+        center_window(self, 980, 640)
         self.minsize(720, 480)
 
         cfg = load_ssh_config()
@@ -592,7 +720,7 @@ class SymlinkPropagationApp(tk.Tk):
                 samples.append(r["archaic_path"])
         samples.extend(self.search_roots)
         if not samples:
-            messagebox.showinfo("Auto-map", "Set modern paths or search roots first.")
+            self._mb_info("Auto-map", "Set modern paths or search roots first.")
             return
         self.status_var.set("Discovering POSIX maps via SSH…")
         self.update_idletasks()
@@ -610,10 +738,10 @@ class SymlinkPropagationApp(tk.Tk):
         self.ssh_map_var.set(self._format_maps(result.get("unc_to_posix") or {}))
         if result.get("ok"):
             self.status_var.set(result.get("message") or "Maps saved.")
-            messagebox.showinfo("Auto-map", result.get("message") or "OK")
+            self._mb_info("Auto-map", result.get("message") or "OK")
         else:
             self.status_var.set(result.get("message") or "Auto-map failed")
-            messagebox.showerror("Auto-map", result.get("message") or "Failed")
+            self._mb_error("Auto-map", result.get("message") or "Failed")
 
     def _row_index(self) -> int | None:
         sel = self.tree.selection()
@@ -623,6 +751,66 @@ class SymlinkPropagationApp(tk.Tk):
             return int(sel[0])
         except ValueError:
             return None
+
+    def _mb_info(self, title: str, message: str) -> str:
+        p = screen_center_parent(self)
+        try:
+            return messagebox.showinfo(title, message, parent=p)
+        finally:
+            try:
+                p.destroy()
+            except tk.TclError:
+                pass
+
+    def _mb_warn(self, title: str, message: str) -> str:
+        p = screen_center_parent(self)
+        try:
+            return messagebox.showwarning(title, message, parent=p)
+        finally:
+            try:
+                p.destroy()
+            except tk.TclError:
+                pass
+
+    def _mb_error(self, title: str, message: str) -> str:
+        p = screen_center_parent(self)
+        try:
+            return messagebox.showerror(title, message, parent=p)
+        finally:
+            try:
+                p.destroy()
+            except tk.TclError:
+                pass
+
+    def _mb_yesno(self, title: str, message: str) -> bool:
+        p = screen_center_parent(self)
+        try:
+            return bool(messagebox.askyesno(title, message, parent=p))
+        finally:
+            try:
+                p.destroy()
+            except tk.TclError:
+                pass
+
+    def _ask_directory(self, title: str) -> str:
+        p = screen_center_parent(self)
+        try:
+            return filedialog.askdirectory(title=title, parent=p) or ""
+        finally:
+            try:
+                p.destroy()
+            except tk.TclError:
+                pass
+
+    def _ask_open_file(self, title: str, filetypes: list[tuple[str, str]]) -> str:
+        p = screen_center_parent(self)
+        try:
+            return filedialog.askopenfilename(title=title, filetypes=filetypes, parent=p) or ""
+        finally:
+            try:
+                p.destroy()
+            except tk.TclError:
+                pass
 
     @staticmethod
     def _stored_kind(stored: str) -> str:
@@ -676,14 +864,18 @@ class SymlinkPropagationApp(tk.Tk):
         if col == "modern":
             return (
                 "Target .blend to rempath to after stubs load. "
-                "Search fills this by exact basename; use Browse/Pick when names changed."
+                "Search auto-fills only when a single exact (or single related) hit exists; "
+                "multiple hits (including date-stamped filenames) need Pick hit."
             )
 
         if col == "basename":
             return "Library filename Blender links (exact basename match for Search)."
 
         if col == "status":
-            return "ok = modern file exists on disk; hits = Search found candidates."
+            return (
+                "ok = modern file exists on disk; "
+                "N hits — pick = Search found multiple candidates (use Pick hit)."
+            )
 
         return ""
 
@@ -696,7 +888,7 @@ class SymlinkPropagationApp(tk.Tk):
             if modern:
                 status = "ok" if os.path.isfile(modern) else "missing"
             elif n > 1:
-                status = f"{n} hits"
+                status = f"{n} hits — pick"
             elif n == 1:
                 status = "1 hit"
             self.tree.insert(
@@ -717,7 +909,7 @@ class SymlinkPropagationApp(tk.Tk):
         save_session(self.session_file, self.session)
 
     def _add_root(self) -> None:
-        path = filedialog.askdirectory(title="Add search root")
+        path = self._ask_directory("Add search root")
         if not path:
             return
         path = os.path.normpath(path)
@@ -737,11 +929,11 @@ class SymlinkPropagationApp(tk.Tk):
 
     def _run_search(self) -> None:
         if not self.search_roots:
-            messagebox.showinfo("Search", "Add at least one search root folder.")
+            self._mb_info("Search", "Add at least one search root folder.")
             return
         missing_roots = [r for r in self.search_roots if not os.path.isdir(r)]
         if missing_roots:
-            messagebox.showwarning(
+            self._mb_warn(
                 "Search",
                 "These search roots do not exist (check for typos):\n\n"
                 + "\n".join(missing_roots),
@@ -761,6 +953,7 @@ class SymlinkPropagationApp(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _apply_search_hits(self, hits: dict[str, list[str]], skipped: list[str] | None = None) -> None:
+        need_pick = 0
         for row in self.rows:
             want = row["basename"]
             cands = rank_modern_hits(hits.get(want, []), want_basename=want)
@@ -770,15 +963,18 @@ class SymlinkPropagationApp(tk.Tk):
                 if len(exact) == 1:
                     row["modern_path"] = exact[0]
                 elif len(exact) > 1:
-                    row["modern_path"] = exact[0]
+                    # Ambiguous (e.g. same basename under date-stamped folders) — require Pick hit.
+                    need_pick += 1
                 elif len(cands) == 1:
                     row["modern_path"] = cands[0]
                 elif len(cands) > 1:
-                    # Multiple related hits (e.g. unbaked + baked) — prefer exact-ranked top.
-                    row["modern_path"] = cands[0]
+                    # Multiple related-only hits — require Pick hit.
+                    need_pick += 1
         self._refresh_tree()
         filled = sum(1 for r in self.rows if r.get("modern_path"))
         msg = f"Search done — {filled}/{len(self.rows)} modern paths set."
+        if need_pick:
+            msg += f" {need_pick} need Pick hit."
         if skipped:
             msg += f" ({len(skipped)} root(s) missing on disk)"
         self.status_var.set(msg)
@@ -786,11 +982,11 @@ class SymlinkPropagationApp(tk.Tk):
     def _browse_modern(self) -> None:
         idx = self._row_index()
         if idx is None:
-            messagebox.showinfo("Browse", "Select a row first.")
+            self._mb_info("Browse", "Select a row first.")
             return
-        path = filedialog.askopenfilename(
-            title="Modern .blend",
-            filetypes=[("Blender", "*.blend"), ("All", "*.*")],
+        path = self._ask_open_file(
+            "Modern .blend",
+            [("Blender", "*.blend"), ("All", "*.*")],
         )
         if not path:
             return
@@ -800,29 +996,34 @@ class SymlinkPropagationApp(tk.Tk):
     def _pick_candidate(self) -> None:
         idx = self._row_index()
         if idx is None:
-            messagebox.showinfo("Pick", "Select a row first.")
+            self._mb_info("Pick", "Select a row first.")
             return
         cands = self.rows[idx].get("candidates") or []
         if not cands:
-            messagebox.showinfo("Pick", "No search hits for this row. Run Search or Browse.")
+            self._mb_info("Pick", "No search hits for this row. Run Search or Browse.")
             return
         win = tk.Toplevel(self)
         win.title("Choose modern path")
-        win.geometry("640x320")
+        win.transient(self)
+        center_window(win, 640, 320)
         lb = tk.Listbox(win, exportselection=False)
         lb.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         for c in cands:
             lb.insert(tk.END, c)
         lb.selection_set(0)
+        lb.focus_set()
 
-        def ok() -> None:
+        def ok(_event=None) -> None:
             sel = lb.curselection()
             if sel:
                 self.rows[idx]["modern_path"] = cands[sel[0]]
                 self._refresh_tree()
             win.destroy()
 
+        lb.bind("<Double-Button-1>", ok)
+        lb.bind("<Return>", ok)
         ttk.Button(win, text="Use selected", command=ok).pack(pady=4)
+        win.grab_set()
 
     def _clear_modern(self) -> None:
         idx = self._row_index()
@@ -885,11 +1086,11 @@ class SymlinkPropagationApp(tk.Tk):
     def _create_stubs(self) -> None:
         pairs = self._pairs_from_rows()
         if not pairs:
-            messagebox.showwarning("Create stubs", "Set at least one modern path first.")
+            self._mb_warn("Create stubs", "Set at least one modern path first.")
             return
         incomplete = [r["basename"] for r in self.rows if not r.get("modern_path")]
         if incomplete:
-            if not messagebox.askyesno(
+            if not self._mb_yesno(
                 "Create stubs",
                 f"{len(incomplete)} row(s) have no modern path and will be skipped.\nContinue?",
             ):
@@ -897,7 +1098,7 @@ class SymlinkPropagationApp(tk.Tk):
 
         mode = self.stub_mode.get() or "copy"
         if mode == "copy":
-            if not messagebox.askyesno(
+            if not self._mb_yesno(
                 "Copy stubs",
                 "This copies full .blend files to the archaic paths, then deletes "
                 "those copies on teardown if they still match what was written.\n\n"
@@ -921,7 +1122,7 @@ class SymlinkPropagationApp(tk.Tk):
                 self.ssh_map_var.set(self._format_maps(ssh["unc_to_posix"]))
             elif mode == "linux_ssh":
                 self.action_btn.configure(state=tk.NORMAL)
-                messagebox.showerror("Create stubs", disc.get("message") or "Need UNC→POSIX maps")
+                self._mb_error("Create stubs", disc.get("message") or "Need UNC→POSIX maps")
                 return
 
         if ssh.get("host"):
@@ -944,7 +1145,7 @@ class SymlinkPropagationApp(tk.Tk):
                 detail = "; ".join(
                     f"{os.path.basename(f.get('archaic_path',''))}: {f.get('message')}" for f in failed[:3]
                 )
-            messagebox.showerror(
+            self._mb_error(
                 "Create stubs",
                 detail or f"Failed ({len(failed)}). Check SSH maps / permissions.",
             )
@@ -965,7 +1166,7 @@ class SymlinkPropagationApp(tk.Tk):
                 f"{os.path.basename(f.get('archaic_path') or '?')}: {f.get('message')}"
                 for f in failed[:5]
             )
-            messagebox.showwarning(
+            self._mb_warn(
                 "Partial stubs",
                 f"Created {len(created)}, failed {len(failed)}.\n{detail}\n\n"
                 "Failed rows are excluded from Remap. Fix SSH maps / share access, "
@@ -1007,7 +1208,7 @@ class SymlinkPropagationApp(tk.Tk):
         if data.get("status") != STATUS_APPLY_DONE:
             n = int(data.get("remapped_count") or 0)
             if n <= 0:
-                if not messagebox.askyesno(
+                if not self._mb_yesno(
                     "Confirm",
                     "Blender has not reported a successful rempath yet "
                     "(remapped_count=0).\n\n"
@@ -1015,7 +1216,7 @@ class SymlinkPropagationApp(tk.Tk):
                     "point at archaic paths.\n\nProceed anyway?",
                 ):
                     return
-            elif not messagebox.askyesno(
+            elif not self._mb_yesno(
                 "Confirm",
                 "Session is not apply_done yet. Mark apply done and proceed to teardown?",
             ):
@@ -1047,15 +1248,15 @@ class SymlinkPropagationApp(tk.Tk):
                 f"{os.path.basename(f.get('archaic_path') or '?')}: {f.get('message')}"
                 for f in failed[:5]
             )
-            messagebox.showwarning("Teardown", f"Some stubs failed to remove ({len(failed)}).\n{detail}")
+            self._mb_warn("Teardown", f"Some stubs failed to remove ({len(failed)}).\n{detail}")
         else:
-            messagebox.showinfo("Teardown", "Stubs removed. You can close this window.")
+            self._mb_info("Teardown", "Stubs removed. You can close this window.")
         self.destroy()
 
     def _on_close(self) -> None:
         status = (read_json(self.session_file) or {}).get("status")
         if status in (STATUS_STUBS_READY, STATUS_APPLY_DONE):
-            if not messagebox.askyesno(
+            if not self._mb_yesno(
                 "Close wizard?",
                 "Stubs may still exist. Close without teardown?\n"
                 "(You can reopen via Symlink Propagation if the session file remains.)",
