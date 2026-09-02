@@ -58,32 +58,44 @@ def save_session(path: str, data: dict[str, Any]) -> None:
 
 
 def center_window(win: tk.Misc, width: int | None = None, height: int | None = None) -> None:
-    """Place *win* at the center of the primary screen."""
+    """Place *win* at the center of the primary screen (Windows-safe).
+
+    Call after widgets exist, ideally while withdrawn, then deiconify.
+    Windows often ignores geometry set before the first map.
+    """
     win.update_idletasks()
-    w = int(width if width is not None else max(win.winfo_width(), win.winfo_reqwidth()))
-    h = int(height if height is not None else max(win.winfo_height(), win.winfo_reqheight()))
-    sw = win.winfo_screenwidth()
-    sh = win.winfo_screenheight()
-    x = max(0, (sw - w) // 2)
-    y = max(0, (sh - h) // 2)
-    win.geometry(f"{w}x{h}+{x}+{y}")
-
-
-def screen_center_parent(master: tk.Misc) -> tk.Toplevel:
-    """Invisible 1x1 window at screen center so modal dialogs spawn there."""
-    anchor = tk.Toplevel(master)
-    anchor.withdraw()
-    anchor.overrideredirect(True)
-    sw = master.winfo_screenwidth()
-    sh = master.winfo_screenheight()
-    anchor.geometry(f"1x1+{max(0, sw // 2)}+{max(0, sh // 2)}")
+    w = int(width if width is not None else max(win.winfo_reqwidth(), 1))
+    h = int(height if height is not None else max(win.winfo_reqheight(), 1))
     try:
-        anchor.transient(master)
+        cw, ch = int(win.winfo_width()), int(win.winfo_height())
+        if width is None and cw > 1:
+            w = cw
+        if height is None and ch > 1:
+            h = ch
     except tk.TclError:
         pass
-    anchor.deiconify()
-    anchor.update_idletasks()
-    return anchor
+    sw = int(win.winfo_screenwidth())
+    sh = int(win.winfo_screenheight())
+    x = max(0, (sw - w) // 2)
+    y = max(0, (sh - h) // 2)
+    geo = f"{w}x{h}+{x}+{y}"
+    win.geometry(geo)
+    win.update_idletasks()
+
+    # Re-apply after map — first geometry is frequently discarded on Win32.
+    def _reapply() -> None:
+        try:
+            if not win.winfo_exists():
+                return
+            win.geometry(geo)
+        except tk.TclError:
+            pass
+
+    try:
+        win.after_idle(_reapply)
+        win.after(50, _reapply)
+    except tk.TclError:
+        pass
 
 
 def scripts_dir() -> str:
@@ -492,11 +504,12 @@ class WidgetHoverTip:
 class SymlinkPropagationApp(tk.Tk):
     def __init__(self, session_file: str):
         super().__init__()
+        # Withdraw until laid out + centered — avoids Win32 default top-left flash.
+        self.withdraw()
         self.session_file = session_file
         self.session_dir = os.path.dirname(session_file)
         self.session = load_session(session_file)
         self.title("Symlink Propagation")
-        center_window(self, 980, 640)
         self.minsize(720, 480)
 
         cfg = load_ssh_config()
@@ -545,6 +558,8 @@ class SymlinkPropagationApp(tk.Tk):
             self._set_phase_teardown_ready()
         else:
             self._set_phase_search()
+        center_window(self, 980, 640)
+        self.deiconify()
 
     def _build(self) -> None:
         pad = {"padx": 8, "pady": 4}
@@ -753,64 +768,23 @@ class SymlinkPropagationApp(tk.Tk):
             return None
 
     def _mb_info(self, title: str, message: str) -> str:
-        p = screen_center_parent(self)
-        try:
-            return messagebox.showinfo(title, message, parent=p)
-        finally:
-            try:
-                p.destroy()
-            except tk.TclError:
-                pass
+        # Parent the main window so Win32 dialogs center over it (not a fake 1x1).
+        return messagebox.showinfo(title, message, parent=self)
 
     def _mb_warn(self, title: str, message: str) -> str:
-        p = screen_center_parent(self)
-        try:
-            return messagebox.showwarning(title, message, parent=p)
-        finally:
-            try:
-                p.destroy()
-            except tk.TclError:
-                pass
+        return messagebox.showwarning(title, message, parent=self)
 
     def _mb_error(self, title: str, message: str) -> str:
-        p = screen_center_parent(self)
-        try:
-            return messagebox.showerror(title, message, parent=p)
-        finally:
-            try:
-                p.destroy()
-            except tk.TclError:
-                pass
+        return messagebox.showerror(title, message, parent=self)
 
     def _mb_yesno(self, title: str, message: str) -> bool:
-        p = screen_center_parent(self)
-        try:
-            return bool(messagebox.askyesno(title, message, parent=p))
-        finally:
-            try:
-                p.destroy()
-            except tk.TclError:
-                pass
+        return bool(messagebox.askyesno(title, message, parent=self))
 
     def _ask_directory(self, title: str) -> str:
-        p = screen_center_parent(self)
-        try:
-            return filedialog.askdirectory(title=title, parent=p) or ""
-        finally:
-            try:
-                p.destroy()
-            except tk.TclError:
-                pass
+        return filedialog.askdirectory(title=title, parent=self) or ""
 
     def _ask_open_file(self, title: str, filetypes: list[tuple[str, str]]) -> str:
-        p = screen_center_parent(self)
-        try:
-            return filedialog.askopenfilename(title=title, filetypes=filetypes, parent=p) or ""
-        finally:
-            try:
-                p.destroy()
-            except tk.TclError:
-                pass
+        return filedialog.askopenfilename(title=title, filetypes=filetypes, parent=self) or ""
 
     @staticmethod
     def _stored_kind(stored: str) -> str:
@@ -1003,9 +977,9 @@ class SymlinkPropagationApp(tk.Tk):
             self._mb_info("Pick", "No search hits for this row. Run Search or Browse.")
             return
         win = tk.Toplevel(self)
+        win.withdraw()
         win.title("Choose modern path")
         win.transient(self)
-        center_window(win, 640, 320)
         lb = tk.Listbox(win, exportselection=False)
         lb.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         for c in cands:
@@ -1023,6 +997,8 @@ class SymlinkPropagationApp(tk.Tk):
         lb.bind("<Double-Button-1>", ok)
         lb.bind("<Return>", ok)
         ttk.Button(win, text="Use selected", command=ok).pack(pady=4)
+        center_window(win, 640, 320)
+        win.deiconify()
         win.grab_set()
 
     def _clear_modern(self) -> None:
