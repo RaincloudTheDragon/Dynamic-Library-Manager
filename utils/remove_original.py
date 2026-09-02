@@ -801,21 +801,79 @@ def _orig_actions(orig):
     return actions
 
 
+def _strip_rep_suffix(name):
+    """Return name without a trailing .rep / .rep.NNN migration suffix, or None."""
+    if not name or ".rep" not in name:
+        return None
+    # Prefer endswith so Foo.rep.001 → Foo (unique-name collision from _duplicate_action).
+    if name.endswith(".rep"):
+        return name[: -len(".rep")]
+    # Foo.rep.001 / Foo.rep.002 …
+    parts = name.rsplit(".", 2)
+    if len(parts) == 3 and parts[1] == "rep" and parts[2].isdigit():
+        return parts[0]
+    # Legacy: any embedded .rep (previous strip behavior).
+    return name.replace(".rep", "")
+
+
+def _action_is_unused(action):
+    """True when action can be removed to free the target name."""
+    if action is None:
+        return False
+    users = int(getattr(action, "users", 0) or 0)
+    if users == 0:
+        return True
+    # Fake-user alone counts as users==1.
+    if users == 1 and getattr(action, "use_fake_user", False):
+        return True
+    return False
+
+
+def _anim_data_owners(rep):
+    """Yield IDs whose animation_data may hold .rep actions for this replacement."""
+    if not rep:
+        return
+    from . import descendants
+
+    seen = set()
+    for ob in (rep, *descendants(rep)):
+        if ob is None:
+            continue
+        ptr = ob.as_pointer()
+        if ptr in seen:
+            continue
+        seen.add(ptr)
+        yield ob
+        data = getattr(ob, "data", None)
+        sk = getattr(data, "shape_keys", None) if data is not None else None
+        if sk is not None:
+            sk_ptr = sk.as_pointer()
+            if sk_ptr not in seen:
+                seen.add(sk_ptr)
+                yield sk
+
+
 def _rename_rep_actions(rep):
-    """Strip .rep suffix from replacement actions after orig is gone."""
+    """Strip .rep suffix from replacement actions (object + shape-key NLA/active)."""
     renamed = []
-    if not rep or not getattr(rep, "animation_data", None):
+    if not rep:
         return renamed
-    ad = rep.animation_data
+    done = set()
 
     def _strip_rep(action):
-        if action is None or ".rep" not in action.name:
+        if action is None:
             return None
+        ptr = action.as_pointer()
+        if ptr in done:
+            return None
+        new_name = _strip_rep_suffix(action.name)
+        if new_name is None or new_name == action.name:
+            return None
+        done.add(ptr)
         old = action.name
-        new_name = old.replace(".rep", "")
         # Leftover unused orig action often still holds the target name.
         existing = bpy.data.actions.get(new_name)
-        if existing is not None and existing != action and getattr(existing, "users", 0) == 0:
+        if existing is not None and existing != action and _action_is_unused(existing):
             try:
                 bpy.data.actions.remove(existing)
             except Exception:
@@ -823,14 +881,18 @@ def _rename_rep_actions(rep):
         action.name = new_name
         return f"{old} -> {action.name}"
 
-    msg = _strip_rep(ad.action)
-    if msg:
-        renamed.append(msg)
-    for track in ad.nla_tracks:
-        for strip in track.strips:
-            msg = _strip_rep(strip.action)
-            if msg:
-                renamed.append(msg)
+    for owner in _anim_data_owners(rep):
+        ad = getattr(owner, "animation_data", None)
+        if not ad:
+            continue
+        msg = _strip_rep(ad.action)
+        if msg:
+            renamed.append(msg)
+        for track in ad.nla_tracks:
+            for strip in track.strips:
+                msg = _strip_rep(strip.action)
+                if msg:
+                    renamed.append(msg)
     return renamed
 
 
