@@ -50,10 +50,10 @@ class DLM_OT_make_paths_absolute(Operator):
 
 
 class DLM_OT_symlink_propagation(Operator):
-    """Launch Symlink Propagation wizard (stubs). When stubs are ready, use Revert / Remap."""
+    """Launch Missing Library Propagation wizard (stubs). When stubs are ready, use Revert / Remap."""
 
     bl_idname = "dlm.symlink_propagation"
-    bl_label = "Symlink Propagation"
+    bl_label = "Missing Library Propagation"
     bl_description = (
         "Stub missing armature libraries (pose data is lost if those libs are missing on load). "
         "After stubs: Revert, verify hits, then Remap (no auto-save). "
@@ -89,7 +89,7 @@ class DLM_OT_symlink_propagation(Operator):
 
         if status == stub_handoff.STATUS_OPENED:
             if stub_handoff.wizard_appears_running(session):
-                self.report({"INFO"}, "Symlink Propagation wizard is already open.")
+                self.report({"INFO"}, "Missing Library Propagation wizard is already open.")
                 return {"FINISHED"}
             # Stale session without a live wizard — start fresh below.
             stub_handoff.clear_session()

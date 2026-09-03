@@ -3,7 +3,7 @@
 # the Free Software Foundation; either version 3 of the License, or
 # (at your option) any later version.
 
-"""Library path helpers for Symlink Propagation (apply after stubs).
+"""Library path helpers for Missing Library Propagation (apply after stubs).
 
 Scope: only missing libraries that contribute armatures (pose / bone data is
 lost on load when the lib is missing — Blender #143902). Other missing links
@@ -99,7 +99,7 @@ def library_is_baked_character_path(lib) -> bool:
 
 def collect_missing_libraries() -> list[dict[str, Any]]:
     """
-    Missing libraries that need Symlink Propagation (unique by absolute path).
+    Missing libraries that need Missing Library Propagation (unique by absolute path).
 
     Includes:
       - libs that link armatures (pose loss on missing load — Blender #143902)
@@ -301,7 +301,7 @@ def remap_readiness(plan: list[dict[str, Any]]) -> tuple[bool, str]:
     for lib in bpy.data.libraries:
         pair = find_plan_pair_for_library(lib, plan)
         if not pair:
-            # Out of Symlink Propagation scope — never blocks Remap.
+            # Out of Missing Library Propagation scope — never blocks Remap.
             continue
 
         modern = pair.get("modern_path") or ""
@@ -386,7 +386,7 @@ def schedule_save_after_rempath() -> None:
 
     def _tick():
         ok = save_mainfile_after_rempath()
-        print(f"[DLM] Symlink Propagation: saved remapped paths={ok}")
+        print(f"[DLM] Missing Library Propagation: saved remapped paths={ok}")
         return None
 
     try:

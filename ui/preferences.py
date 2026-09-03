@@ -14,7 +14,7 @@ class DynamicLinkManagerPreferences(AddonPreferences):
     symlink_search_roots: StringProperty(
         name="Default Search Roots",
         description=(
-            "Semicolon-separated folders used as the Symlink Propagation "
+            "Semicolon-separated folders used as the Missing Library Propagation "
             "wizard's starting search roots (basename lookup for modern .blend files)"
         ),
         default="",
@@ -24,7 +24,7 @@ class DynamicLinkManagerPreferences(AddonPreferences):
     def draw(self, context):
         layout = self.layout
         box = layout.box()
-        box.label(text="Symlink Propagation (armature libs only)")
+        box.label(text="Missing Library Propagation (armature libs only)")
         box.prop(self, "symlink_search_roots", text="")
         box.label(text="Separate folders with semicolons.", icon="INFO")
         box.label(

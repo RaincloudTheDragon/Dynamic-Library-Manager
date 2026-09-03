@@ -3,7 +3,7 @@
 # the Free Software Foundation; either version 3 of the License, or
 # (at your option) any later version.
 
-"""Handoff between DLM and the Symlink Propagation wizard / native symlinker."""
+"""Handoff between DLM and the Missing Library Propagation wizard / native symlinker."""
 
 from __future__ import annotations
 
@@ -439,7 +439,7 @@ def _process_cmdline(pid: int) -> str:
 
 
 def spawn_wizard(wait: bool = False) -> dict[str, Any]:
-    """Spawn the Symlink Propagation tkinter wizard (usually non-blocking)."""
+    """Spawn the Missing Library Propagation tkinter wizard (usually non-blocking)."""
     script = wizard_script_path()
     if not os.path.isfile(script):
         return {"ok": False, "error": f"Wizard script missing: {script}"}

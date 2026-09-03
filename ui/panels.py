@@ -35,7 +35,7 @@ class DLM_PT_main_panel(Panel):
             row.operator("dlm.symlink_revert", text="Revert", icon="FILE_REFRESH")
             row.operator("dlm.symlink_remap", text="Remap", icon="FILE_TICK")
         else:
-            row.operator("dlm.symlink_propagation", text="Symlink Propagation", icon="LINKED")
+            row.operator("dlm.symlink_propagation", text="Missing Library Propagation", icon="LINKED")
 
         # Character Migrator: core + situational fixes + tweak tools under one section
         section_icon = "DISCLOSURE_TRI_DOWN" if props.charmig_section_expanded else "DISCLOSURE_TRI_RIGHT"

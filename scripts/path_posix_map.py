@@ -246,7 +246,7 @@ def discover_posix_root(host: str, unc_share: str, rel_under_share: str) -> str 
     Find POSIX directory that corresponds to *unc_share*.
 
     Prefers locating *rel_under_share* when that file exists on the server.
-    For missing archaic libs (the usual Symlink Propagation case), falls back to
+    For missing archaic libs (the usual Missing Library Propagation case), falls back to
     matching the share mount and any existing parent directory of *rel*.
     """
     rel_posix = rel_under_share.replace("\\", "/").lstrip("/")

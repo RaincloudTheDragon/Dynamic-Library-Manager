@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Symlink Propagation wizard — search modern libs, create stubs, await Blender apply, teardown.
+"""Missing Library Propagation wizard — search modern libs, create stubs, await Blender apply, teardown.
 
 Driven by a session JSON written by Dynamic Link Manager (utils/stub_handoff.py).
 Uses scripts/path_symlinker.py for native OS stub create/teardown.
@@ -509,7 +509,7 @@ class SymlinkPropagationApp(tk.Tk):
         self.session_file = session_file
         self.session_dir = os.path.dirname(session_file)
         self.session = load_session(session_file)
-        self.title("Symlink Propagation")
+        self.title("Missing Library Propagation")
         self.minsize(720, 480)
 
         cfg = load_ssh_config()
@@ -1235,14 +1235,14 @@ class SymlinkPropagationApp(tk.Tk):
             if not self._mb_yesno(
                 "Close wizard?",
                 "Stubs may still exist. Close without teardown?\n"
-                "(You can reopen via Symlink Propagation if the session file remains.)",
+                "(You can reopen via Missing Library Propagation if the session file remains.)",
             ):
                 return
         self.destroy()
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="DLM Symlink Propagation wizard")
+    parser = argparse.ArgumentParser(description="DLM Missing Library Propagation wizard")
     parser.add_argument("--session", required=True, help="Path to session.json")
     args = parser.parse_args(argv)
     crash_log = os.path.join(os.path.dirname(args.session) or ".", "wizard_crash.log")

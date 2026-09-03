@@ -3,7 +3,7 @@
 # the Free Software Foundation; either version 3 of the License, or
 # (at your option) any later version.
 
-"""Blender app handlers for Symlink Propagation (legacy pending_apply after load).
+"""Blender app handlers for Missing Library Propagation (legacy pending_apply after load).
 
 New flow: Revert and Remap are separate operators; Remap does not save.
 """
@@ -22,13 +22,13 @@ def dlm_load_post(_dummy):
 
         result = path_normalize.run_pending_symlink_apply()
         if result.get("remapped"):
-            print(f"[DLM] Symlink Propagation: remapped {result['remapped']} armature library path(s)")
+            print(f"[DLM] Missing Library Propagation: remapped {result['remapped']} armature library path(s)")
             for row in (result.get("applied") or [])[:8]:
                 print(f"[DLM]   {row.get('id_name')}: {row.get('from')!r} → {row.get('to')!r}")
         elif result.get("message") and result.get("message") != "no pending apply":
-            print(f"[DLM] Symlink Propagation apply: {result.get('message')}")
+            print(f"[DLM] Missing Library Propagation apply: {result.get('message')}")
     except Exception as e:
-        print(f"[DLM] Symlink Propagation load_post failed: {e}")
+        print(f"[DLM] Missing Library Propagation load_post failed: {e}")
 
 
 def register():
