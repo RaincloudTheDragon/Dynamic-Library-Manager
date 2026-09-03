@@ -1,3 +1,34 @@
+## [v0.5.0] - 2026-09-03
+
+### Features
+
+- Prop Migrator: migrate non-armature props (pair, copy attributes, NLA, constraints, relatives, retarget, Remove Original) separately from Character Migrator.
+- Missing Library Propagation: external wizard stubs missing armature libraries (SSH on SMB), then Blender Continue rempaths; non-armature links stay for Atomic/FMT/search.
+- Stub modes: Auto / Linux SSH / Native, plus explicit copy-file stubs with fingerprint-gated teardown; optional Windows `subst` for phantom drive letters.
+- MigObjConst / MigObjRelatives: copy object constraints (names preserved for NLA), split object parenting, and path-parenting support; override armatures use Child Of when the parent is outside the asset hierarchy.
+- MigNLA: copy unkeyed pose and object loc/rot/scale (partial keys respected); map/copy Blender 4.4+ action slots and cache duplicated `.rep` actions.
+- RetargRelatives: collection-wide orig→rep object maps (nested collections, suffix stripping), modifier pointers, and world-motion-preserving reparent when scales differ.
+- Remove Original: snapshot orig IDs and purge leftover orphans after deletion; remap leftover refs before delete.
+- Tweak tools: ALS-safe bake on all tweak sets, not only MigFKRot.
+
+### Changed
+
+- Character Migrator panel: Situational Fixes and Tweak Tools collapse under CharMig.
+- Linked Libraries Analysis UI/ops removed (path work lives in Missing Library Propagation).
+- Missing Library Propagation: default stub mode is copy-file (safer on SMB); Auto/Linux SSH remain when symlinks are required.
+- Renamed Symlink Propagation → Missing Library Propagation (operator id `dlm.symlink_propagation` unchanged).
+- Search: match date-stamped archive basenames (`YYYY.MM.DD…_Name.blend`); do not auto-fill modern path when several hits exist (Pick hit).
+- Release: draft notes come from CHANGELOG; default tag is `v{version}` from `blender_manifest.toml`.
+
+### Fixes
+
+- Remove Original: soft-unlink override hierarchies instead of `collections.remove`; target override asset root (not local staging collections); skip ghost GC for armatures inside in-scene collection instances; do not purge linked namesakes after a local orig is gone.
+- Remove Original: strip `.rep` from replacement actions (PropMig too), including descendant shape-key actions; drop unused name collisions.
+- MigObjRelatives: keep orig `matrix_parent_inverse` + `matrix_basis` on Child Of so override parenting survives playhead scrub.
+- RetargRelatives: skip action rewrite when the same bone parents both armatures; preserve `parent_type` / `parent_bone` / inverse / basis; shift Bezier handles with value deltas.
+- Missing Library Propagation: persist AssetArchive rempaths after apply; rewrite stored paths even when stubs already resolve; include `*_baked` missing libs; prune empty stub parent dirs; prevent SMB unlink/copy from moving AssetArchive moderns; require Windows-visible SSH stubs; gate Remap to in-scope pairs; initialize rows before subst auto-detect; center wizard/dialogs after map on Windows.
+- POSIX map discovery: prefer existing files, still record UNC samples when archaic libs are missing.
+
 ## [v0.4.2] - 2026-08-18
 
 ### Fixes
