@@ -155,7 +155,7 @@ jobs:
           mkdir -p "$ADDON_DIR"
 
           # Allowlist only — never bundle .specstory, tests, or other dev assets
-          for file in __init__.py blender_manifest.toml CHANGELOG.md changelog.md; do
+          for file in __init__.py blender_manifest.toml CHANGELOG.md changelog.md README.md readme.md; do
             if [ -f "$file" ]; then
               cp "$file" "$ADDON_DIR"/
             else
