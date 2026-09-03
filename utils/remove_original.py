@@ -912,7 +912,7 @@ def run_remove_original(context, orig, rep, report):
     )
 
     name = orig.name
-    props = context.scene.dynamic_link_manager
+    props = context.scene.dynamic_library_manager
     rig_family = getattr(props, "migrator_rig_family", "RIGIFY")
     ghost = rep
     rep = resolve_migration_armature(rep, context.scene)
@@ -1064,7 +1064,7 @@ def run_remove_original(context, orig, rep, report):
                         keep.add(data)
             doomed -= keep
 
-            context.scene.dynamic_link_manager.original_character = None
+            context.scene.dynamic_library_manager.original_character = None
             if soft_remove:
                 _remove_orig_sibling_override_instance(orig, coll, report)
             else:
@@ -1112,7 +1112,7 @@ def run_remove_original(context, orig, rep, report):
                     orig.hide_render = True
                 except Exception:
                     pass
-                context.scene.dynamic_link_manager.original_character = None
+                context.scene.dynamic_library_manager.original_character = None
                 soft_remove = True
                 report(
                     {"INFO"},
@@ -1120,7 +1120,7 @@ def run_remove_original(context, orig, rep, report):
                 )
             else:
                 bpy.data.objects.remove(orig, do_unlink=True)
-                context.scene.dynamic_link_manager.original_character = None
+                context.scene.dynamic_library_manager.original_character = None
                 report({"INFO"}, f"Removed original character: {name}")
     except Exception as e:
         report({"ERROR"}, f"Failed to remove original: {e}")

@@ -270,7 +270,7 @@ def _get_migrator_pair(context):
     """Return (orig, rep) from scene props (manual or automatic). (None, None) if invalid."""
     from ..ops.migrator import get_pair_manual, get_pair_automatic, resolve_migration_pair
 
-    props = getattr(context.scene, "dynamic_link_manager", None)
+    props = getattr(context.scene, "dynamic_library_manager", None)
     if not props:
         return None, None
     use_auto = getattr(props, "migrator_mode", False)
@@ -395,7 +395,7 @@ class DLM_OT_migrator_object_relatives(Operator):
             from ..ops.migrator import run_mig_obj_relatives
 
             rep = run_mig_obj_relatives(orig, rep, {orig: rep}, context.scene)
-            props = context.scene.dynamic_link_manager
+            props = context.scene.dynamic_library_manager
             if rep is not None and props.replacement_character != rep:
                 props.replacement_character = rep
             self.report({"INFO"}, "Object relatives done.")
@@ -470,7 +470,7 @@ class DLM_OT_migrator_basebody_shapekeys(Operator):
             from ..utils import descendants
             rep_descendants = descendants(rep)
             run_mig_bbody_shapekeys(orig, rep, rep_descendants, context)
-            props = context.scene.dynamic_link_manager
+            props = context.scene.dynamic_library_manager
             if props.migbbody_manual_override and (
                 not props.migbbody_orig_body or not props.migbbody_rep_body
             ):
@@ -599,7 +599,7 @@ class DLM_OT_picker_original_character(Operator):
         if not obj or obj.type != "ARMATURE":
             self.report({"WARNING"}, "Select an armature")
             return {"CANCELLED"}
-        context.scene.dynamic_link_manager.original_character = obj
+        context.scene.dynamic_library_manager.original_character = obj
         self.report({"INFO"}, f"Original: {obj.name}")
         return {"FINISHED"}
 
@@ -615,7 +615,7 @@ class DLM_OT_picker_replacement_character(Operator):
         if not obj or obj.type != "ARMATURE":
             self.report({"WARNING"}, "Select an armature")
             return {"CANCELLED"}
-        context.scene.dynamic_link_manager.replacement_character = obj
+        context.scene.dynamic_library_manager.replacement_character = obj
         self.report({"INFO"}, f"Replacement: {obj.name}")
         return {"FINISHED"}
 
@@ -638,7 +638,7 @@ class DLM_OT_picker_original_prop(Operator):
         if not obj or obj.type == "ARMATURE":
             self.report({"WARNING"}, "Select a non-armature object")
             return {"CANCELLED"}
-        context.scene.dynamic_link_manager.original_prop = obj
+        context.scene.dynamic_library_manager.original_prop = obj
         self.report({"INFO"}, f"Original prop: {obj.name}")
         return {"FINISHED"}
 
@@ -654,7 +654,7 @@ class DLM_OT_picker_replacement_prop(Operator):
         if not obj or obj.type == "ARMATURE":
             self.report({"WARNING"}, "Select a non-armature object")
             return {"CANCELLED"}
-        context.scene.dynamic_link_manager.replacement_prop = obj
+        context.scene.dynamic_library_manager.replacement_prop = obj
         self.report({"INFO"}, f"Replacement prop: {obj.name}")
         return {"FINISHED"}
 
@@ -670,7 +670,7 @@ class DLM_OT_prop_migrator_remove_original(Operator):
 
         orig, rep = _get_prop_migrator_pair(context)
         # Allow remove when only orig is set (rep optional but recommended).
-        props = getattr(context.scene, "dynamic_link_manager", None)
+        props = getattr(context.scene, "dynamic_library_manager", None)
         orig = orig or (getattr(props, "original_prop", None) if props else None)
         rep = rep or (getattr(props, "replacement_prop", None) if props else None)
         if not orig:
@@ -896,7 +896,7 @@ class DLM_OT_tweak_bake_arm(Operator):
 
     def execute(self, context):
         orig, rep = _get_migrator_pair(context)
-        props = context.scene.dynamic_link_manager
+        props = context.scene.dynamic_library_manager
         from ..ops import tweak_tools
         ok, msg = tweak_tools.bake_tweak_constraints(
             context, orig, rep, "arm",
@@ -958,7 +958,7 @@ class DLM_OT_tweak_bake_leg(Operator):
 
     def execute(self, context):
         orig, rep = _get_migrator_pair(context)
-        props = context.scene.dynamic_link_manager
+        props = context.scene.dynamic_library_manager
         from ..ops import tweak_tools
         ok, msg = tweak_tools.bake_tweak_constraints(
             context, orig, rep, "leg",
@@ -1020,7 +1020,7 @@ class DLM_OT_tweak_bake_body(Operator):
 
     def execute(self, context):
         orig, rep = _get_migrator_pair(context)
-        props = context.scene.dynamic_link_manager
+        props = context.scene.dynamic_library_manager
         from ..ops import tweak_tools
         ok, msg = tweak_tools.bake_tweak_constraints(
             context, orig, rep, "body",
@@ -1082,7 +1082,7 @@ class DLM_OT_tweak_bake_both(Operator):
 
     def execute(self, context):
         orig, rep = _get_migrator_pair(context)
-        props = context.scene.dynamic_link_manager
+        props = context.scene.dynamic_library_manager
         from ..ops import tweak_tools
         ok, msg = tweak_tools.bake_tweak_constraints(
             context, orig, rep, "both",

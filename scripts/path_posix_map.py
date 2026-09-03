@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Windows path ↔ POSIX mapping for SSH stub creation on Linux SMB hosts.
 
-Maps are persisted under %LOCALAPPDATA%/DynamicLinkManager (not Blender prefs)
-so vscode-development addon reloads do not wipe them.
+Maps are persisted under %LOCALAPPDATA%/DynamicLibraryManager (not Blender prefs)
+so vscode-development addon reloads do not wipe them. Migrates the former
+DynamicLinkManager folder once if present.
 """
 
 from __future__ import annotations
@@ -21,8 +22,15 @@ def norm_win(fp: str) -> str:
 
 
 def config_dir(create: bool = True) -> str:
+    """Return DLM config dir; rename legacy DynamicLinkManager once if needed."""
     base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    path = os.path.join(base, "DynamicLinkManager")
+    path = os.path.join(base, "DynamicLibraryManager")
+    legacy = os.path.join(base, "DynamicLinkManager")
+    if os.path.isdir(legacy) and not os.path.exists(path):
+        try:
+            os.rename(legacy, path)
+        except OSError:
+            path = legacy
     if create:
         os.makedirs(path, exist_ok=True)
     return path

@@ -13,7 +13,7 @@ from bpy.props import (
 )
 
 
-class DynamicLinkManagerProperties(PropertyGroup):
+class DynamicLibraryManagerProperties(PropertyGroup):
     # Character Migrator (collapsible): includes Situational Fixes + Tweak Tools
     charmig_section_expanded: BoolProperty(
         name="Character Migrator Expanded",

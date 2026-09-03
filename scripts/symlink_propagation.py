@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Missing Library Propagation wizard — search modern libs, create stubs, await Blender apply, teardown.
 
-Driven by a session JSON written by Dynamic Link Manager (utils/stub_handoff.py).
+Driven by a session JSON written by Dynamic Library Manager (utils/stub_handoff.py).
 Uses scripts/path_symlinker.py for native OS stub create/teardown.
 """
 

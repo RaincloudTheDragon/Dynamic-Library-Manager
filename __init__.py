@@ -14,22 +14,22 @@
 import bpy
 
 from .ui import CLASSES
-from .ui.properties import DynamicLinkManagerProperties
-from .ui.preferences import DynamicLinkManagerPreferences
+from .ui.properties import DynamicLibraryManagerProperties
+from .ui.preferences import DynamicLibraryManagerPreferences
 from .utils import handlers as dlm_handlers
 
 
 def register():
-    DynamicLinkManagerPreferences.bl_idname = __name__
+    DynamicLibraryManagerPreferences.bl_idname = __name__
     for cls in CLASSES:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.dynamic_link_manager = bpy.props.PointerProperty(type=DynamicLinkManagerProperties)
+    bpy.types.Scene.dynamic_library_manager = bpy.props.PointerProperty(type=DynamicLibraryManagerProperties)
     dlm_handlers.register()
 
 
 def unregister():
     dlm_handlers.unregister()
-    del bpy.types.Scene.dynamic_link_manager
+    del bpy.types.Scene.dynamic_library_manager
     for cls in reversed(CLASSES):
         try:
             bpy.utils.unregister_class(cls)

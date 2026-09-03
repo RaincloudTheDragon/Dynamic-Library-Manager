@@ -3,7 +3,7 @@
 # the Free Software Foundation; either version 3 of the License, or
 # (at your option) any later version.
 
-"""Shared helpers for Dynamic Link Manager."""
+"""Shared helpers for Dynamic Library Manager."""
 
 import bpy
 

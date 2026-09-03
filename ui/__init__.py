@@ -5,16 +5,16 @@
 
 from .operators import OPERATOR_CLASSES
 from .panels import DLM_PT_main_panel
-from .preferences import DynamicLinkManagerPreferences
+from .preferences import DynamicLibraryManagerPreferences
 from . import properties
 
 PANEL_CLASSES = [DLM_PT_main_panel]
 
 CLASSES = (
-    properties.DynamicLinkManagerProperties,
-    DynamicLinkManagerPreferences,
+    properties.DynamicLibraryManagerProperties,
+    DynamicLibraryManagerPreferences,
     DLM_PT_main_panel,
     *OPERATOR_CLASSES,
 )
 
-__all__ = ["CLASSES", "OPERATOR_CLASSES", "PANEL_CLASSES", "DynamicLinkManagerPreferences", "properties"]
+__all__ = ["CLASSES", "OPERATOR_CLASSES", "PANEL_CLASSES", "DynamicLibraryManagerPreferences", "properties"]

@@ -8,7 +8,7 @@ from bpy.types import AddonPreferences
 from bpy.props import StringProperty
 
 
-class DynamicLinkManagerPreferences(AddonPreferences):
+class DynamicLibraryManagerPreferences(AddonPreferences):
     bl_idname = __package__.rsplit(".", 1)[0]
 
     symlink_search_roots: StringProperty(

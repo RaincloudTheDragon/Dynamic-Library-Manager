@@ -78,7 +78,7 @@ def _rep_active_for_animlayers(context, rep):
 
 def get_pair_manual(context):
     """Return (orig_armature, rep_armature) from scene props, or (None, None)."""
-    props = getattr(context.scene, "dynamic_link_manager", None)
+    props = getattr(context.scene, "dynamic_library_manager", None)
     if not props:
         return None, None
     orig = getattr(props, "original_character", None)
@@ -90,7 +90,7 @@ def get_pair_manual(context):
 
 def get_prop_pair(context):
     """Return (orig_prop, rep_prop) non-armature objects from scene props, or (None, None)."""
-    props = getattr(context.scene, "dynamic_link_manager", None)
+    props = getattr(context.scene, "dynamic_library_manager", None)
     if not props:
         return None, None
     orig = getattr(props, "original_prop", None)
@@ -1260,7 +1260,7 @@ def _process_mig_bbody_mesh(orig_base, ob, context):
 
 def run_mig_bbody_shapekeys(orig, rep, rep_descendants, context=None):
     """Replacement base body: library override (fully editable when context given), copy shapekey values, then shape-key action."""
-    props = getattr(context.scene, "dynamic_link_manager", None) if context else None
+    props = getattr(context.scene, "dynamic_library_manager", None) if context else None
     if props and getattr(props, "migbbody_manual_override", False):
         mo = getattr(props, "migbbody_orig_body", None)
         mr = getattr(props, "migbbody_rep_body", None)
@@ -1294,7 +1294,7 @@ def run_full_migration(context):
     MigBoneConst, RetargRelatives, MigBBodyShapeKeys.
     Returns (True, message) on success, (False, error_message) on failure.
     """
-    props = getattr(context.scene, "dynamic_link_manager", None)
+    props = getattr(context.scene, "dynamic_library_manager", None)
     use_auto = props and getattr(props, "migrator_mode", False)
     orig, rep = (get_pair_automatic(context) if use_auto else get_pair_manual(context))
     if not orig or not rep:
@@ -1392,7 +1392,7 @@ def run_remove_original_prop(context, orig, rep, report=None):
         except Exception:
             pass
 
-    props = getattr(context.scene, "dynamic_link_manager", None)
+    props = getattr(context.scene, "dynamic_library_manager", None)
     if props is not None:
         props.original_prop = None
 

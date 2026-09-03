@@ -10,8 +10,8 @@ from bpy.types import Panel
 class DLM_PT_main_panel(Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
-    bl_category = "Dynamic Link Manager"
-    bl_label = "Dynamic Link Manager"
+    bl_category = "Dynamic Library Manager"
+    bl_label = "Dynamic Library Manager"
 
     def draw_header(self, context):
         layout = self.layout
@@ -19,7 +19,7 @@ class DLM_PT_main_panel(Panel):
 
     def draw(self, context):
         layout = self.layout
-        props = context.scene.dynamic_link_manager
+        props = context.scene.dynamic_library_manager
 
         # Path management
         row = layout.row()
