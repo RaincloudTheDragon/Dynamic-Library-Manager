@@ -17,7 +17,17 @@ class DLM_PG_search_root(PropertyGroup):
         description="Directory used as a starting search root for modern .blend files",
         subtype="DIR_PATH",
         default="",
+        update=lambda self, context: _persist_prefs_sidecar(),
     )
+
+
+def _persist_prefs_sidecar():
+    """Write reload-safe prefs sidecar (no-op while restoring)."""
+    try:
+        from ..utils.prefs_sidecar import save_sidecar
+        save_sidecar()
+    except Exception:
+        pass
 
 
 def _addon_prefs(context=None):
@@ -67,6 +77,7 @@ def set_prefs_search_paths(paths, prefs=None, ensure_one=True):
         item.path = norm
     if ensure_one and len(prefs.symlink_search_paths) == 0:
         prefs.symlink_search_paths.add()
+    _persist_prefs_sidecar()
     return True
 
 
@@ -155,6 +166,7 @@ class DLM_OT_prefs_search_root_add(Operator):
         if not prefs:
             return {"CANCELLED"}
         prefs.symlink_search_paths.add()
+        _persist_prefs_sidecar()
         return {"FINISHED"}
 
 
@@ -175,4 +187,5 @@ class DLM_OT_prefs_search_root_remove(Operator):
             return {"CANCELLED"}
         if 0 <= self.index < len(prefs.symlink_search_paths):
             prefs.symlink_search_paths.remove(self.index)
+            _persist_prefs_sidecar()
         return {"FINISHED"}
