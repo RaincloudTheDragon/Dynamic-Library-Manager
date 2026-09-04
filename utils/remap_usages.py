@@ -6,8 +6,14 @@
 """Remap object ID pointers (constraints, modifiers, DOF, drivers) from orig to rep."""
 
 import re
+import time
 
 import bpy
+
+
+def _remap_dbg(msg):
+    """Flushed remap progress so stalls show the last completed step."""
+    print(f"[DLM remap] {msg}", flush=True)
 
 
 def _id_map(src, dst, orig_to_rep):
@@ -838,13 +844,87 @@ def reparent_preserve_world_path(ob, new_parent, old_parent=None):
             return False
 
 
+def _user_map_for_ids(ids):
+    """
+    Reverse ID reference map via Blender's C-level ``bpy.data.user_map``.
+
+    Same idea as Atomic's RNA reference dump / datablock-utils User Map, but
+    scoped to *ids* so unrelated Outliner override hierarchies are not walked in Python.
+    """
+    keys = [i for i in ids if i is not None]
+    if not keys:
+        return {}
+    t0 = time.perf_counter()
+    _remap_dbg(f"user_map subset={len(keys)} …")
+    try:
+        umap = bpy.data.user_map(subset=keys)
+        _remap_dbg(f"user_map done {time.perf_counter() - t0:.3f}s")
+        return umap
+    except TypeError:
+        # Older API without subset — still better than per-bone Python walks.
+        full = bpy.data.user_map()
+        _remap_dbg(f"user_map (full) done {time.perf_counter() - t0:.3f}s")
+        return {k: full.get(k, set()) for k in keys}
+    except Exception as e:
+        _remap_dbg(f"user_map failed ({e}); falling back to full object scan")
+        return None
+
+
+def _objects_and_armatures_using(ids):
+    """
+    Objects (and orphan armature datablocks) that reference any ID in *ids*.
+
+    Returns (objects: set[Object], orphan_armatures: set[Armature], used_user_map: bool).
+    """
+    t0 = time.perf_counter()
+    umap = _user_map_for_ids(ids)
+    if umap is None:
+        return set(bpy.data.objects), set(), False
+
+    objects = set()
+    orphan_arms = set()
+    arm_users = set()
+    for src in ids:
+        if src is None:
+            continue
+        for user in umap.get(src, ()):
+            try:
+                ident = user.bl_rna.identifier
+            except Exception:
+                continue
+            if ident == "Object":
+                objects.add(user)
+            elif ident == "Armature":
+                arm_users.add(user)
+
+    if arm_users:
+        for ob in bpy.data.objects:
+            if ob.type == "ARMATURE" and ob.data in arm_users:
+                objects.add(ob)
+        linked = {ob.data for ob in objects if ob.type == "ARMATURE" and ob.data}
+        orphan_arms = arm_users - linked
+
+    _remap_dbg(
+        f"owners from user_map: objects={len(objects)} orphan_arms={len(orphan_arms)} "
+        f"resolve={time.perf_counter() - t0:.3f}s"
+    )
+    return objects, orphan_arms, True
+
+
 def remap_parents(mapping):
     """Reparent objects whose parent is a mapping key onto the mapped target."""
     if not mapping:
         return 0
     n = 0
-    # Snapshot first — reparenting mutates hierarchy while we iterate.
-    to_fix = [(ob, mapping[ob.parent]) for ob in bpy.data.objects if ob.parent in mapping]
+    # Prefer user_map children of mapped parents (skips unrelated override trees).
+    candidates, _, scoped = _objects_and_armatures_using(mapping.keys())
+    if not scoped:
+        candidates = bpy.data.objects
+    to_fix = [
+        (ob, mapping[ob.parent])
+        for ob in candidates
+        if getattr(ob, "parent", None) in mapping
+    ]
     for ob, new_parent in to_fix:
         if ob in mapping:
             # Orig-side asset objects die with Remove Original; leave their parents.
@@ -855,7 +935,7 @@ def remap_parents(mapping):
         if reparent_preserve_world_path(ob, new_parent, old_parent=old_parent):
             n += 1
     if n:
-        print(f"[DLM remap] parents={n}")
+        _remap_dbg(f"parents={n}")
     return n
 
 
@@ -874,6 +954,9 @@ def remap_object_usages(
     modifier Object pointers, camera DOF focus_object, and driver target IDs
     on objects and armature datablocks.
 
+    Owners are resolved with ``bpy.data.user_map(subset=…)`` (Atomic-style reverse
+    reference index) so unrelated library-override hierarchies are skipped.
+
     skip_bone_constraints_on: armatures whose pose-bone constraints are left alone
         (orig's Rigify self-targets during RetargRelatives).
     skip_self_drivers_on: objects whose drivers targeting themselves are left alone
@@ -891,16 +974,46 @@ def remap_object_usages(
     skip_own = set(skip_owners or ())
     counts = {"constraints": 0, "bone_constraints": 0, "modifiers": 0, "dof": 0, "drivers": 0}
 
-    for ob in bpy.data.objects:
+    t_all = time.perf_counter()
+    _remap_dbg(f"remap_object_usages mapping={len(mapping)} skip_bones={len(skip_bones)}")
+
+    objects, orphan_arms, scoped = _objects_and_armatures_using(mapping.keys())
+    if scoped:
+        _remap_dbg(f"user_map owners={len(objects)} (of {len(bpy.data.objects)} objects)")
+    else:
+        objects = set(bpy.data.objects)
+        _remap_dbg(f"FULL SCAN owners={len(objects)} (user_map unavailable)")
+
+    # Armatures last — bone/driver walks dominate cost on heavy rigs.
+    obj_list = sorted(objects, key=lambda o: (o.type != "ARMATURE", o.name))
+    n_obj = len(obj_list)
+    t_walk = time.perf_counter()
+    for i, ob in enumerate(obj_list):
+        if i and i % 25 == 0:
+            _remap_dbg(
+                f"  walk {i}/{n_obj} last={ob.name!r} type={ob.type} "
+                f"bone_const={counts['bone_constraints']} drivers={counts['drivers']} "
+                f"elapsed={time.perf_counter() - t_walk:.1f}s"
+            )
+        if ob.type == "ARMATURE" and ob.pose:
+            _remap_dbg(
+                f"  armature {ob.name!r} bones={len(ob.pose.bones)} "
+                f"skip_bones={ob in skip_bones}"
+            )
         if ob not in skip_own:
             for c in getattr(ob, "constraints", []):
                 if _remap_constraint(c, mapping):
                     counts["constraints"] += 1
         if ob.type == "ARMATURE" and ob.pose and ob not in skip_bones:
+            t_bones = time.perf_counter()
             for pbone in ob.pose.bones:
                 for c in pbone.constraints:
                     if _remap_constraint(c, mapping):
                         counts["bone_constraints"] += 1
+            _remap_dbg(
+                f"  armature {ob.name!r} bone walk {time.perf_counter() - t_bones:.3f}s "
+                f"bone_const_total={counts['bone_constraints']}"
+            )
         if ob not in skip_own and ob.modifiers:
             for m in ob.modifiers:
                 if _remap_modifier_object_ptrs(m, mapping):
@@ -919,14 +1032,12 @@ def remap_object_usages(
         if data is not None:
             counts["drivers"] += _remap_drivers_on(data, mapping, skip_drivers)
 
-    seen_arm = {ob.data for ob in bpy.data.objects if ob.type == "ARMATURE" and ob.data}
-    for arm in bpy.data.armatures:
-        if arm in seen_arm:
-            continue
+    for arm in orphan_arms:
         counts["drivers"] += _remap_drivers_on(arm, mapping, skip_drivers)
 
-    print(
-        f"[DLM remap] constraints={counts['constraints']} bone_const={counts['bone_constraints']} "
-        f"mods={counts['modifiers']} dof={counts['dof']} drivers={counts['drivers']}"
+    _remap_dbg(
+        f"done {time.perf_counter() - t_all:.3f}s constraints={counts['constraints']} "
+        f"bone_const={counts['bone_constraints']} mods={counts['modifiers']} "
+        f"dof={counts['dof']} drivers={counts['drivers']}"
     )
     return counts
