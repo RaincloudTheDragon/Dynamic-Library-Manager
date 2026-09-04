@@ -1,3 +1,9 @@
+## [v0.5.1] - 2026-09-04
+
+### Fixes
+
+- Remove Original: much faster on large scenes with many library-override hierarchies — remap via `user_map` subset owners; one-pass in-scene collection-instance set for ghost-armature GC (was O(n²)).
+
 ## [v0.5.0] - 2026-09-03
 
 ### Features
