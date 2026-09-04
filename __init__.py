@@ -24,6 +24,10 @@ def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     bpy.types.Scene.dynamic_library_manager = bpy.props.PointerProperty(type=DynamicLibraryManagerProperties)
+    from .ui.preferences import _addon_prefs, ensure_search_path_collection
+    prefs = _addon_prefs()
+    if prefs and hasattr(prefs, "symlink_search_paths"):
+        ensure_search_path_collection(prefs.symlink_search_paths)
     dlm_handlers.register()
 
 

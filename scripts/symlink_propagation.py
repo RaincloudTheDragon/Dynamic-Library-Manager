@@ -516,6 +516,8 @@ class SymlinkPropagationApp(tk.Tk):
         self.stub_mode = tk.StringVar(value=self.session.get("stub_mode") or "copy")
 
         self.search_roots: list[str] = list(self.session.get("search_roots") or [])
+        if not self.search_roots:
+            self.search_roots = [""]
         self.rows: list[dict[str, Any]] = []
         for m in self.session.get("missing") or []:
             self.rows.append(
@@ -575,18 +577,27 @@ class SymlinkPropagationApp(tk.Tk):
             self.roots_list.insert(tk.END, r)
         btns = ttk.Frame(roots_row)
         btns.pack(side=tk.LEFT, padx=4)
-        b_add = ttk.Button(btns, text="Add…", command=self._add_root)
-        b_add.pack(fill=tk.X)
-        b_rem = ttk.Button(btns, text="Remove", command=self._remove_root)
-        b_rem.pack(fill=tk.X, pady=2)
+        add_rem = ttk.Frame(btns)
+        add_rem.pack(fill=tk.X)
+        self.b_add_root = ttk.Button(add_rem, text="Add…", command=self._add_root)
+        self.b_add_root.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.b_rem_root = ttk.Button(add_rem, text="Remove", command=self._remove_root)
+        self.b_rem_root.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
         b_search = ttk.Button(btns, text="Search", command=self._run_search)
-        b_search.pack(fill=tk.X)
-        WidgetHoverTip(b_add, "Add a folder to search for modern .blend files by exact basename.")
-        WidgetHoverTip(b_rem, "Remove the selected search root from this session’s list.")
+        b_search.pack(fill=tk.X, pady=2)
+        WidgetHoverTip(
+            self.b_add_root,
+            "Add a folder to search for modern .blend files by exact basename.",
+        )
+        WidgetHoverTip(
+            self.b_rem_root,
+            "Remove the selected search root (at least one root is always kept).",
+        )
         WidgetHoverTip(
             b_search,
             "Walk search roots for exact basename matches. Skips folder names starting with '.'.",
         )
+        self._update_root_buttons()
 
         ssh_frame = ttk.LabelFrame(
             top,
@@ -882,37 +893,59 @@ class SymlinkPropagationApp(tk.Tk):
         self.session["search_roots"] = list(self.search_roots)
         save_session(self.session_file, self.session)
 
+    def _update_root_buttons(self) -> None:
+        """Disable Remove when only one search root remains."""
+        state = tk.NORMAL if len(self.search_roots) > 1 else tk.DISABLED
+        if getattr(self, "b_rem_root", None) is not None:
+            self.b_rem_root.configure(state=state)
+
     def _add_root(self) -> None:
         path = self._ask_directory("Add search root")
         if not path:
             return
         path = os.path.normpath(path)
+        # Replace a sole empty placeholder row if present
+        if self.search_roots == [""]:
+            self.search_roots[0] = path
+            self.roots_list.delete(0)
+            self.roots_list.insert(0, path)
+            self._persist_roots()
+            self._update_root_buttons()
+            return
         if path not in self.search_roots:
             self.search_roots.append(path)
             self.roots_list.insert(tk.END, path)
             self._persist_roots()
+            self._update_root_buttons()
 
     def _remove_root(self) -> None:
+        if len(self.search_roots) <= 1:
+            return
         sel = self.roots_list.curselection()
         if not sel:
             return
         idx = sel[0]
         self.roots_list.delete(idx)
         del self.search_roots[idx]
+        if not self.search_roots:
+            self.search_roots = [""]
+            self.roots_list.insert(tk.END, "")
         self._persist_roots()
+        self._update_root_buttons()
 
     def _run_search(self) -> None:
-        if not self.search_roots:
+        usable = [r for r in self.search_roots if (r or "").strip()]
+        if not usable:
             self._mb_info("Search", "Add at least one search root folder.")
             return
-        missing_roots = [r for r in self.search_roots if not os.path.isdir(r)]
+        missing_roots = [r for r in usable if not os.path.isdir(r)]
         if missing_roots:
             self._mb_warn(
                 "Search",
                 "These search roots do not exist (check for typos):\n\n"
                 + "\n".join(missing_roots),
             )
-        ok_roots = [r for r in self.search_roots if os.path.isdir(r)]
+        ok_roots = [r for r in usable if os.path.isdir(r)]
         if not ok_roots:
             self.status_var.set("Search skipped — no existing search roots.")
             return

@@ -104,11 +104,13 @@ class DLM_OT_symlink_propagation(Operator):
             )
             return {"FINISHED"}
 
-        from ..ui.preferences import parse_search_roots
+        from ..ui.preferences import get_prefs_search_paths
 
-        roots: list[str] = []
+        roots = get_prefs_search_paths()
         addon = _prefs(context)
-        if addon and hasattr(addon.preferences, "symlink_search_roots"):
+        # Legacy fallback if an old semicolon string preference is still present
+        if not roots and addon and hasattr(addon.preferences, "symlink_search_roots"):
+            from ..ui.preferences import parse_search_roots
             roots = parse_search_roots(addon.preferences.symlink_search_roots)
 
         stub_handoff.create_session(
