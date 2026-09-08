@@ -1,3 +1,13 @@
+## [v0.5.2] - 2026-09-08
+
+### Features
+
+- Missing Library Propagation: double-click a multi-hit row to open Pick hit.
+
+### Fixes
+
+- MigNLA: offset NLA strips evaluate 1:1 on RepChar — do not leave a tweak/strip action as the permanent active action; skip no-op AnimLayers `turn_on` writes that re-stash strip actions (#1).
+
 ## [v0.5.1] - 2026-09-04
 
 ### Fixes
