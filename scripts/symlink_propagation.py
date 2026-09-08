@@ -682,6 +682,8 @@ class SymlinkPropagationApp(tk.Tk):
             "#5": "status",
         }
         TreeHoverTip(self.tree, self._tree_hover_text)
+        # Double-click a multi-hit row to open the candidate picker.
+        self.tree.bind("<Double-Button-1>", self._on_tree_double_click, add="+")
 
         row_btns = ttk.Frame(mid)
         row_btns.pack(side=tk.LEFT, fill=tk.Y, padx=4)
@@ -697,7 +699,8 @@ class SymlinkPropagationApp(tk.Tk):
         )
         WidgetHoverTip(
             b_pick,
-            "Choose among multiple Search hits for the selected row.",
+            "Choose among multiple Search hits for the selected row "
+            "(or double-click the row).",
         )
         WidgetHoverTip(b_clear, "Clear the modern path on the selected row.")
 
@@ -850,7 +853,8 @@ class SymlinkPropagationApp(tk.Tk):
             return (
                 "Target .blend to rempath to after stubs load. "
                 "Search auto-fills only when a single exact (or single related) hit exists; "
-                "multiple hits (including date-stamped filenames) need Pick hit."
+                "multiple hits (including date-stamped filenames) need Pick hit "
+                "(or double-click the row)."
             )
 
         if col == "basename":
@@ -859,7 +863,8 @@ class SymlinkPropagationApp(tk.Tk):
         if col == "status":
             return (
                 "ok = modern file exists on disk; "
-                "N hits — pick = Search found multiple candidates (use Pick hit)."
+                "N hits — pick = Search found multiple candidates "
+                "(Pick hit… or double-click the row)."
             )
 
         return ""
@@ -1033,6 +1038,14 @@ class SymlinkPropagationApp(tk.Tk):
         center_window(win, 640, 320)
         win.deiconify()
         win.grab_set()
+
+    def _on_tree_double_click(self, _event=None) -> None:
+        """Open Pick hit when the row has multiple Search candidates."""
+        idx = self._row_index()
+        if idx is None:
+            return
+        if len(self.rows[idx].get("candidates") or []) > 1:
+            self._pick_candidate()
 
     def _clear_modern(self) -> None:
         idx = self._row_index()
