@@ -223,18 +223,22 @@ def _debug_als_lookup(orig):
 
 def _mirror_als_turn_on(orig, rep):
     """Mirror Animation Layers state: obj.als.turn_on (RNA) and id-property fallbacks."""
-    # Animation Layers addon: Object.als is RNA PropertyGroup
+    # Animation Layers addon: Object.als is RNA PropertyGroup.
+    # Only write when the value changes — assigning False→False still runs ALS
+    # handlers that stash strip actions as active and disable use_nla (#1).
     orig_als = getattr(orig, "als", None)
     rep_als = getattr(rep, "als", None)
     if orig_als is not None and rep_als is not None:
         try:
-            rep_als.turn_on = orig_als.turn_on
+            if rep_als.turn_on != orig_als.turn_on:
+                rep_als.turn_on = orig_als.turn_on
         except Exception:
             pass
     key = "als.turn_on"
     if key in orig:
         try:
-            rep[key] = orig[key]
+            if key not in rep or rep[key] != orig[key]:
+                rep[key] = orig[key]
         except Exception:
             pass
     try:
@@ -242,13 +246,15 @@ def _mirror_als_turn_on(orig, rep):
         if als is not None and callable(getattr(als, "keys", None)) and "turn_on" in als.keys():
             if "als" not in rep:
                 rep["als"] = {}
-            rep["als"]["turn_on"] = als["turn_on"]
+            if "turn_on" not in rep["als"] or rep["als"]["turn_on"] != als["turn_on"]:
+                rep["als"]["turn_on"] = als["turn_on"]
     except Exception:
         pass
     if getattr(orig, "data", None) and hasattr(orig.data, "keys") and key in orig.data:
         try:
             if rep.data is not None and hasattr(rep.data, "keys"):
-                rep.data[key] = orig.data[key]
+                if key not in rep.data or rep.data[key] != orig.data[key]:
+                    rep.data[key] = orig.data[key]
         except Exception:
             pass
     if orig.type != "ARMATURE" or not getattr(orig, "pose", None) or not getattr(rep, "pose", None):
@@ -259,7 +265,8 @@ def _mirror_als_turn_on(orig, rep):
         rbone = rep.pose.bones[pbone.name]
         if key in pbone:
             try:
-                rbone[key] = pbone[key]
+                if key not in rbone or rbone[key] != pbone[key]:
+                    rbone[key] = pbone[key]
             except Exception:
                 pass
         try:
@@ -267,10 +274,10 @@ def _mirror_als_turn_on(orig, rep):
             if als is not None and callable(getattr(als, "keys", None)) and "turn_on" in als.keys():
                 if "als" not in rbone:
                     rbone["als"] = {}
-                rbone["als"]["turn_on"] = als["turn_on"]
+                if "turn_on" not in rbone["als"] or rbone["als"]["turn_on"] != als["turn_on"]:
+                    rbone["als"]["turn_on"] = als["turn_on"]
         except Exception:
             pass
-
 
 def _activate_topmost_als(context, orig, rep):
     """Select the topmost Animation Layers track on orig and rep after MigNLA."""
@@ -673,24 +680,41 @@ def run_mig_nla(orig, rep, report=None, context=None):
             _copy_action_slot(strip, new_strip, dup_action)
         prev_track = new_track
 
-    # Also mirror active action + slot when orig has one (ALS / mixed setups).
-    if active_action is not None:
-        rad = rep.animation_data
-        dup_active = action_map.get(active_action)
+    # Active action vs NLA: tweak mode exposes the strip action as ad.action.
+    # Promoting that to a permanent rep.action evaluates without strip offset (#1).
+    # Only mirror a true upper Action when it is not already an NLA strip action.
+    rad = rep.animation_data
+    in_tweak = bool(getattr(ad, "use_tweak_mode", False))
+    if in_tweak:
+        true_active = getattr(ad, "action_tweak_storage", None)
+    else:
+        true_active = active_action
+    # Strip actions already live in action_map; a separate active action does not.
+    mirror_active = true_active is not None and true_active not in action_map
+
+    if hasattr(ad, "use_nla") and hasattr(rad, "use_nla"):
+        # Outside tweak, trust orig; in tweak the stack is still the real driver.
+        rad.use_nla = True if in_tweak else bool(ad.use_nla)
+
+    if mirror_active:
+        dup_active = action_map.get(true_active)
         created_dup = False
         if dup_active is None:
-            dup_active = _duplicate_action(active_action, suffix=".rep")
+            dup_active = _duplicate_action(true_active, suffix=".rep")
             created_dup = True
         if hasattr(ad, "last_slot_identifier") and hasattr(rad, "last_slot_identifier") and ad.last_slot_identifier:
             try:
                 rad.last_slot_identifier = ad.last_slot_identifier
             except Exception:
                 pass
-        # ALS may make action read-only; only assign when writable.
         try:
             if not rad.is_property_readonly("action"):
                 rad.action = dup_active
                 _copy_action_slot(ad, rad, dup_active)
+                for prop in ("action_blend_type", "action_extrapolation", "action_influence"):
+                    if hasattr(ad, prop) and hasattr(rad, prop):
+                        setattr(rad, prop, getattr(ad, prop))
+                print(f"[DLM MigNLA] mirrored non-strip active action -> {dup_active.name if dup_active else None}")
             else:
                 print("[DLM MigNLA] rep.action is read-only (ALS); strip slots already copied")
                 if created_dup and dup_active and dup_active.users == 0:
@@ -700,10 +724,46 @@ def run_mig_nla(orig, rep, report=None, context=None):
                         pass
         except Exception as e:
             print(f"[DLM MigNLA] active action mirror skipped: {e}")
+    else:
+        # Match manual fix for #1: no stale active action; evaluate offset strips via NLA.
+        try:
+            if getattr(rad, "use_tweak_mode", False):
+                try:
+                    rad.use_tweak_mode = False
+                except Exception:
+                    pass
+            if not rad.is_property_readonly("action"):
+                rad.action = None
+                print("[DLM MigNLA] cleared rep.action so offset NLA strips evaluate")
+            else:
+                print("[DLM MigNLA] rep.action read-only; left NLA strips as evaluation source")
+        except Exception as e:
+            print(f"[DLM MigNLA] clear rep.action skipped: {e}")
+        if hasattr(rad, "use_nla"):
+            rad.use_nla = True
 
     with _rep_active_for_animlayers(context, rep):
         _mirror_als_turn_on(orig, rep)
         _activate_topmost_als(context, orig, rep)
+        # AnimLayers handlers run on als.turn_on assign even when False: they
+        # stash the strip action as active and set use_nla=False. Undo that when
+        # ALS is not actually on so offset strips evaluate (#1). When ALS is on,
+        # tweak-mode evaluation already applies strip offset — leave it.
+        from ..utils.nla_bake import als_on
+        if not als_on(rep) and not mirror_active:
+            try:
+                if getattr(rad, "use_tweak_mode", False):
+                    try:
+                        rad.use_tweak_mode = False
+                    except Exception:
+                        pass
+                if not rad.is_property_readonly("action") and rad.action is not None:
+                    rad.action = None
+                    print("[DLM MigNLA] re-cleared rep.action after ALS mirror (ALS off)")
+                if hasattr(rad, "use_nla"):
+                    rad.use_nla = True
+            except Exception as e:
+                print(f"[DLM MigNLA] post-ALS NLA restore skipped: {e}")
     obj_n, bone_n = _copy_unkeyed_transforms(orig, rep)
     if report:
         _debug_als_lookup(orig)
