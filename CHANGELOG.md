@@ -1,3 +1,9 @@
+## [v0.5.3] - 2026-09-09
+
+### Features
+
+- RetargRelatives: optional **Retain scale** checkbox — keep replacement object scale when remapping children off a scaled original (default off; unit-normalize still used for prop/grabber workflows).
+
 ## [v0.5.2] - 2026-09-08
 
 ### Features
