@@ -108,3 +108,14 @@ class DynamicLibraryManagerProperties(PropertyGroup):
         description="Run action clean keyframes and graph decimate (error 0.001) after baking",
         default=False,
     )
+
+    # RetargRelatives: keep rep object scale when remapping children off a scaled orig
+    retarg_retain_scale: BoolProperty(
+        name="Retain scale",
+        description=(
+            "RetargRelatives: keep the replacement object's scale when reparenting "
+            "children from a scaled original. Off (default) normalizes rep to unit "
+            "scale so grabber/prop children stay correct after scale cleanup"
+        ),
+        default=False,
+    )

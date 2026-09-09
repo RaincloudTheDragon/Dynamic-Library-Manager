@@ -1063,7 +1063,7 @@ def run_mig_bone_const(orig, rep, orig_to_rep):
             rr.remove(rr[-1])
 
 
-def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
+def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep, *, retain_scale=False):
     """Retarget relations: parents, constraint/driver/DOF targets, modifiers to rep.
 
     Builds a name map across orig/rep override collections (GEO meshes, etc.), not
@@ -1075,6 +1075,9 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
 
     Skips orig's own Rigify bone constraints and orig's self-drivers so orig
     does not snap to rep. Object constraints on orig's children (eyes) still remap.
+
+    When *retain_scale* is True, do not normalize the replacement parent to unit
+    scale during world-path reparent (keeps CopyAttr scale on scaled armatures).
     """
     from ..utils.remap_usages import (
         build_override_collection_object_map,
@@ -1118,7 +1121,9 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep):
         if ob.parent in mapping:
             old_parent = ob.parent
             new_parent = mapping[ob.parent]
-            if reparent_preserve_world_path(ob, new_parent, old_parent=old_parent):
+            if reparent_preserve_world_path(
+                ob, new_parent, old_parent=old_parent, retain_scale=retain_scale
+            ):
                 reparented += 1
     if reparented:
         print(f"[DLM RetargRelatives] reparented {reparented} object(s) with world-path preserve")
@@ -1376,7 +1381,10 @@ def run_full_migration(context):
         run_mig_obj_const(orig, rep, orig_to_rep)
         run_mig_obj_relatives(orig, rep, orig_to_rep, scene=context.scene)
         run_mig_bone_const(orig, rep, orig_to_rep)
-        run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep)
+        retain_scale = bool(getattr(props, "retarg_retain_scale", False)) if props else False
+        run_retarg_relatives(
+            orig, rep, rep_descendants, orig_to_rep, retain_scale=retain_scale
+        )
         run_mig_bbody_shapekeys(orig, rep, rep_descendants, context)
     except Exception as e:
         return False, str(e)
@@ -1400,7 +1408,11 @@ def run_full_prop_migration(context):
         run_mig_cust_props(orig, rep)
         run_mig_obj_const(orig, rep, orig_to_rep)
         run_mig_obj_relatives(orig, rep, orig_to_rep, scene=context.scene)
-        run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep)
+        props = getattr(context.scene, "dynamic_library_manager", None)
+        retain_scale = bool(getattr(props, "retarg_retain_scale", False)) if props else False
+        run_retarg_relatives(
+            orig, rep, rep_descendants, orig_to_rep, retain_scale=retain_scale
+        )
     except Exception as e:
         return False, str(e)
     return True, f"Prop migrated {orig.name} → {rep.name}"

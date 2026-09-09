@@ -447,7 +447,11 @@ class DLM_OT_migrator_retarget_relations(Operator):
             from ..utils import descendants
             rep_descendants = descendants(rep)
             orig_to_rep = {orig: rep}
-            run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep)
+            props = getattr(context.scene, "dynamic_library_manager", None)
+            retain_scale = bool(getattr(props, "retarg_retain_scale", False))
+            run_retarg_relatives(
+                orig, rep, rep_descendants, orig_to_rep, retain_scale=retain_scale
+            )
             self.report({"INFO"}, "Retarget relations done.")
             return {"FINISHED"}
         except Exception as e:
@@ -816,7 +820,15 @@ class DLM_OT_prop_migrator_retarget_relations(Operator):
             from ..ops.migrator import run_retarg_relatives
             from ..utils import descendants
 
-            run_retarg_relatives(orig, rep, descendants(rep), {orig: rep})
+            props = getattr(context.scene, "dynamic_library_manager", None)
+            retain_scale = bool(getattr(props, "retarg_retain_scale", False))
+            run_retarg_relatives(
+                orig,
+                rep,
+                descendants(rep),
+                {orig: rep},
+                retain_scale=retain_scale,
+            )
             self.report({"INFO"}, "Retarget relatives done.")
             return {"FINISHED"}
         except Exception as e:

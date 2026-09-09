@@ -66,6 +66,8 @@ class DLM_PT_main_panel(Panel):
             row = box.row(align=True)
             row.operator("dlm.migrator_bone_constraints", text="MigBoneConst", icon="CONSTRAINT_BONE")
             row.operator("dlm.migrator_retarget_relations", text="RetargRelatives", icon="ORIENTATION_PARENT")
+            row = box.row()
+            row.prop(props, "retarg_retain_scale", text="Retain scale")
 
             box.separator()
             box.label(text="Situational Fixes", icon="QUESTION")
@@ -136,3 +138,5 @@ class DLM_PT_main_panel(Panel):
             row.operator("dlm.prop_migrator_object_constraints", text="MigObjConst", icon="CONSTRAINT")
             row.operator("dlm.prop_migrator_object_relatives", text="MigObjRelatives", icon="OBJECT_ORIGIN")
             row.operator("dlm.prop_migrator_retarget_relations", text="RetargRelatives", icon="ORIENTATION_PARENT")
+            row = box.row()
+            row.prop(props, "retarg_retain_scale", text="Retain scale")

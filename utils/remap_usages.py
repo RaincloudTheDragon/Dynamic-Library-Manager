@@ -586,26 +586,28 @@ def _matrix_world_loc_rot_only(ob):
     return Matrix.LocRotScale(loc, rot, (1.0, 1.0, 1.0))
 
 
-def _new_parent_matrix_for_reparent(new_parent, old_parent):
+def _new_parent_matrix_for_reparent(new_parent, old_parent, *, retain_scale=False):
     """
     Parent matrix used when solving ``new_local`` during reparent.
 
-    When *old_parent* is scaled, *new_parent* is normalized to unit scale and
-    only loc/rot is used so rep props can stay at applied scale.
+    When *old_parent* is scaled and *retain_scale* is False, *new_parent* is
+    normalized to unit scale and only loc/rot is used so rep props can stay at
+    applied scale. With *retain_scale*, keep *new_parent* scale as-is.
     """
-    if _has_non_unit_scale(old_parent):
+    if not retain_scale and _has_non_unit_scale(old_parent):
         if _has_non_unit_scale(new_parent):
             new_parent.scale = (1.0, 1.0, 1.0)
         return _matrix_world_loc_rot_only(new_parent)
     return new_parent.matrix_world.copy()
 
 
-def _child_parent_space_matrix(parent, child, *, old_parent=None):
+def _child_parent_space_matrix(parent, child, *, old_parent=None, retain_scale=False):
     """
     Evaluated parenting space for *child* under *parent*.
 
     Bone-parented children use ``parent.mw @ pose_bone.matrix``; object parents use
-    the usual object matrix (with scale normalization when *old_parent* is scaled).
+    the usual object matrix (with scale normalization when *old_parent* is scaled
+    and *retain_scale* is False).
     """
     if (
         getattr(child, "parent_type", "OBJECT") == "BONE"
@@ -615,7 +617,11 @@ def _child_parent_space_matrix(parent, child, *, old_parent=None):
     ):
         pb = parent.pose.bones.get(child.parent_bone)
         if pb is not None:
-            if old_parent is not None and _has_non_unit_scale(old_parent):
+            if (
+                old_parent is not None
+                and not retain_scale
+                and _has_non_unit_scale(old_parent)
+            ):
                 if _has_non_unit_scale(parent):
                     parent.scale = (1.0, 1.0, 1.0)
                 arm_mw = _matrix_world_loc_rot_only(parent)
@@ -623,7 +629,9 @@ def _child_parent_space_matrix(parent, child, *, old_parent=None):
                 arm_mw = parent.matrix_world.copy()
             return arm_mw @ pb.matrix
     if old_parent is not None:
-        return _new_parent_matrix_for_reparent(parent, old_parent)
+        return _new_parent_matrix_for_reparent(
+            parent, old_parent, retain_scale=retain_scale
+        )
     return parent.matrix_world.copy()
 
 
@@ -658,7 +666,7 @@ def _iter_action_fcurves(action):
                     yield fc
 
 
-def transform_object_action_for_reparent(ob, old_parent, new_parent) -> bool:
+def transform_object_action_for_reparent(ob, old_parent, new_parent, *, retain_scale=False) -> bool:
     """
     Rewrite *ob* action keyframes from *old_parent* local space into *new_parent* space.
 
@@ -683,8 +691,19 @@ def transform_object_action_for_reparent(ob, old_parent, new_parent) -> bool:
         and getattr(new_parent, "type", None) == "ARMATURE"
         and ob.parent_bone in getattr(old_parent.pose, "bones", {})
         and ob.parent_bone in getattr(new_parent.pose, "bones", {})
-        and not _has_non_unit_scale(old_parent)
-        and not _has_non_unit_scale(new_parent)
+        and (
+            (
+                not _has_non_unit_scale(old_parent)
+                and not _has_non_unit_scale(new_parent)
+            )
+            or (
+                retain_scale
+                and all(
+                    abs(a - b) < 1e-5
+                    for a, b in zip(old_parent.scale, new_parent.scale)
+                )
+            )
+        )
     ):
         print(
             f"[DLM remap] skip action retarget on {ob.name!r} "
@@ -710,7 +729,9 @@ def transform_object_action_for_reparent(ob, old_parent, new_parent) -> bool:
             scene.frame_set(int(t))
             view_layer.update()
             old_mw = _child_parent_space_matrix(old_parent, ob)
-            new_mw = _child_parent_space_matrix(new_parent, ob, old_parent=old_parent)
+            new_mw = _child_parent_space_matrix(
+                new_parent, ob, old_parent=old_parent, retain_scale=retain_scale
+            )
             local_by_time[t] = new_mw.inverted() @ old_mw @ ob.matrix_local.copy()
 
         for fc in fcurves:
@@ -773,7 +794,7 @@ def sync_prop_rep_from_orig(orig, rep) -> bool:
         return False
 
 
-def reparent_preserve_world_path(ob, new_parent, old_parent=None):
+def reparent_preserve_world_path(ob, new_parent, old_parent=None, *, retain_scale=False):
     """
     Reparent *ob* onto *new_parent* so its world motion matches the old parent chain.
 
@@ -785,10 +806,13 @@ def reparent_preserve_world_path(ob, new_parent, old_parent=None):
     ``(1, 1, 1)`` afterward, a compensation computed against scaled rep matrices
     leaves children ~meters off (hands follow grabbers but both fly off the mesh).
 
-    When *old_parent* has non-unit scale, target *new_parent* at unit scale and
-    compensate with the full scaled orig matrix::
+    When *old_parent* has non-unit scale and *retain_scale* is False, target
+    *new_parent* at unit scale and compensate with the full scaled orig matrix::
 
         new_local = new_parent.mw(unit) ^ -1 @ old_parent.mw @ old_local
+
+    Pass *retain_scale* True to keep *new_parent*'s scale (e.g. scaled armature
+    migrations where CopyAttr scale must survive RetargRelatives).
     """
     old_parent = old_parent if old_parent is not None else ob.parent
     if old_parent is None or new_parent is None or ob == new_parent:
@@ -809,7 +833,9 @@ def reparent_preserve_world_path(ob, new_parent, old_parent=None):
         if same_bone:
             mpi = ob.matrix_parent_inverse.copy()
             basis = ob.matrix_basis.copy()
-            transform_object_action_for_reparent(ob, old_parent, new_parent)
+            transform_object_action_for_reparent(
+                ob, old_parent, new_parent, retain_scale=retain_scale
+            )
             ob.parent = new_parent
             ob.parent_type = "BONE"
             ob.parent_bone = parent_bone
@@ -817,12 +843,14 @@ def reparent_preserve_world_path(ob, new_parent, old_parent=None):
             ob.matrix_basis = basis
             return True
 
-        transform_object_action_for_reparent(ob, old_parent, new_parent)
+        transform_object_action_for_reparent(
+            ob, old_parent, new_parent, retain_scale=retain_scale
+        )
 
         old_local = ob.matrix_local.copy()
         old_parent_mw = _child_parent_space_matrix(old_parent, ob)
         new_parent_mw = _child_parent_space_matrix(
-            new_parent, ob, old_parent=old_parent
+            new_parent, ob, old_parent=old_parent, retain_scale=retain_scale
         )
         compensated_local = new_parent_mw.inverted() @ old_parent_mw @ old_local
         ob.parent = new_parent
