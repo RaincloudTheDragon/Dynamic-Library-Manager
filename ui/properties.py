@@ -51,23 +51,45 @@ class DynamicLibraryManagerProperties(PropertyGroup):
         poll=lambda self, obj: obj and obj.type == "ARMATURE",
     )
 
-    # Prop Migrator: object-only pairs (meshes, empties, curves, etc. — not armatures)
+    # Prop Migrator: Object (any type + parent hierarchy) or Collection pair
     propmig_section_expanded: BoolProperty(
         name="Prop Migrator Expanded",
         description="Show or hide the Prop Migrator section",
         default=False,
     )
+    propmig_target: EnumProperty(
+        name="Target",
+        description=(
+            "Object: migrate the pair and name-matched parented children. "
+            "Collection: migrate all name-matched objects under the asset/override "
+            "collections of the picked Original/Replacement objects. "
+            "Bone constraints / tweak tools still live under Character Migrator"
+        ),
+        items=(
+            ("OBJECT", "Object", "Solitary object or armature; migrate parented children"),
+            ("COLLECTION", "Collection", "Map collections of the picked objects"),
+        ),
+        default="OBJECT",
+    )
     original_prop: PointerProperty(
         name="Original Prop",
-        description="Object to migrate from (any type except armature)",
+        description="Object to migrate from (any type, including armature)",
         type=bpy.types.Object,
-        poll=lambda self, obj: obj and obj.type != "ARMATURE",
     )
     replacement_prop: PointerProperty(
         name="Replacement Prop",
-        description="Object to migrate to (any type except armature)",
+        description="Object to migrate to (any type, including armature)",
         type=bpy.types.Object,
-        poll=lambda self, obj: obj and obj.type != "ARMATURE",
+    )
+    original_prop_collection: PointerProperty(
+        name="Original Collection",
+        description="Collection tree to migrate from",
+        type=bpy.types.Collection,
+    )
+    replacement_prop_collection: PointerProperty(
+        name="Replacement Collection",
+        description="Collection tree to migrate to",
+        type=bpy.types.Collection,
     )
 
     # MigBBody: manual mesh pair when CC/iClone-style auto-detection fails
@@ -109,13 +131,28 @@ class DynamicLibraryManagerProperties(PropertyGroup):
         default=False,
     )
 
-    # RetargRelatives: keep rep object scale when remapping children off a scaled orig
+    # CopyAttr + RetargRelatives: keep replacement object scale when enabled
     retarg_retain_scale: BoolProperty(
         name="Retain scale",
         description=(
-            "RetargRelatives: keep the replacement object's scale when reparenting "
-            "children from a scaled original. Off (default) normalizes rep to unit "
-            "scale so grabber/prop children stay correct after scale cleanup"
+            "On: keep the replacement object's scale (CopyAttr skips copying "
+            "scale; RetargRelatives does not normalize rep to unit). "
+            "Off (default/normal): CopyAttr copies scale from original; "
+            "RetargRelatives normalizes scaled parents so grabber/prop children "
+            "stay correct after scale cleanup"
+        ),
+        default=False,
+    )
+
+    # MigNLA: keep replacement object loc/rot/scale (asymmetric hierarchies)
+    mignla_retain_transforms: BoolProperty(
+        name="Retain transforms",
+        description=(
+            "MigNLA: keep the replacement object's location/rotation/scale. "
+            "On when orig and rep sit in different spaces (e.g. free armature "
+            "vs rig parented under the mesh). Off (default): copy unkeyed "
+            "object transforms from original (scale still respects Retain scale). "
+            "Pose/NLA always migrate"
         ),
         default=False,
     )

@@ -89,21 +89,94 @@ def get_pair_manual(context):
 
 
 def get_prop_pair(context):
-    """Return (orig_prop, rep_prop) non-armature objects from scene props, or (None, None)."""
+    """Return (orig, rep) objects from scene props (any type), or (None, None)."""
     props = getattr(context.scene, "dynamic_library_manager", None)
     if not props:
         return None, None
     orig = getattr(props, "original_prop", None)
     rep = getattr(props, "replacement_prop", None)
-    if (
-        orig
-        and orig.type != "ARMATURE"
-        and rep
-        and rep.type != "ARMATURE"
-        and orig != rep
-    ):
+    if orig and rep and orig != rep:
         return orig, rep
     return None, None
+
+
+def _collection_for_prop_object(ob, scene=None):
+    """
+    Collection to migrate for a PropMig Collection-mode pick.
+
+    Override assets use the outermost override collection (e.g. pallete-wrap).
+    Local/non-override props use the deepest users_collection (e.g. package-wrap),
+    not a scene ancestor like Animation.
+    """
+    from ..utils.remap_usages import (
+        _deepest_users_collection,
+        is_library_override_id,
+        override_root_collection,
+    )
+
+    if ob is None:
+        return None
+    scene = scene or bpy.context.scene
+    root = override_root_collection(ob, scene)
+    if root is not None and is_library_override_id(root):
+        return root
+    deep = _deepest_users_collection(scene, ob)
+    if deep is not None:
+        return deep
+    colls = list(getattr(ob, "users_collection", []) or [])
+    return colls[0] if colls else None
+
+
+def get_prop_migration_context(context):
+    """
+    Resolve PropMig targets into (roots, mapping).
+
+    *roots* is a list of ``(orig, rep)`` pairs for CopyAttr / MigObjRelatives.
+    *mapping* is the full orig→rep object map (hierarchy or collection).
+
+    Object and Collection modes share the same Original/Replacement object fields.
+    Collection mode maps the asset/override collections those objects live in.
+
+    Returns ``(None, None)`` when the pair is unset or invalid.
+    """
+    from ..utils.remap_usages import (
+        build_collection_object_map,
+        build_hierarchy_object_map,
+        migration_root_pairs,
+    )
+
+    props = getattr(context.scene, "dynamic_library_manager", None)
+    if not props:
+        return None, None
+
+    orig, rep = get_prop_pair(context)
+    if not orig or not rep:
+        return None, None
+
+    mode = getattr(props, "propmig_target", "OBJECT")
+    if mode == "COLLECTION":
+        oc = _collection_for_prop_object(orig, context.scene)
+        rc = _collection_for_prop_object(rep, context.scene)
+        if not oc or not rc or oc == rc:
+            return None, None
+        # Keep collection pointers in sync for Remove Original / diagnostics.
+        try:
+            props.original_prop_collection = oc
+            props.replacement_prop_collection = rc
+        except Exception:
+            pass
+        mapping = build_collection_object_map(oc, rc)
+        if not mapping:
+            return None, None
+        roots = migration_root_pairs(mapping)
+        if not roots:
+            o0, r0 = next(iter(mapping.items()))
+            roots = [(o0, r0)]
+        return roots, mapping
+
+    mapping = build_hierarchy_object_map(orig, rep)
+    roots = migration_root_pairs(mapping) or [(orig, rep)]
+    return roots, mapping
 
 
 def get_pair_automatic(context):
@@ -121,14 +194,55 @@ def get_pair_automatic(context):
     return pairs[0] if pairs else (None, None)
 
 
-def run_copy_attr(orig, rep):
-    """Copy armature object attributes: location, rotation, scale (CopyAttr)."""
+def _ensure_object_override_editable(ob):
+    """Promote a system library override so transform writes create REPLACE ops.
+
+    System overrides accept Python assignments in-session, but leave
+    ``override_library.properties`` empty — UI and resync snap back to the
+    linked values (common on prop roots like ``pallete``).
+    """
+    if ob is None:
+        return
+    ol = getattr(ob, "override_library", None)
+    if ol is None or not getattr(ol, "is_system_override", False):
+        return
+    try:
+        ol.is_system_override = False
+    except Exception as e:
+        print(f"[DLM] {ob.name!r} is_system_override=False failed: {e}")
+
+
+def _flush_object_override_ops(ob):
+    """Refresh override REPLACE ops after writing RNA on an override object."""
+    if ob is None:
+        return
+    ol = getattr(ob, "override_library", None)
+    if ol is None:
+        return
+    try:
+        ol.operations_update()
+    except Exception as e:
+        print(f"[DLM] {ob.name!r} override operations_update failed: {e}")
+
+
+def run_copy_attr(orig, rep, *, retain_scale=False):
+    """Copy object location and rotation from orig to rep (CopyAttr).
+
+    When *retain_scale* is True (Retain scale on), leave rep scale unchanged.
+    When False (normal), also copy scale from orig.
+
+    Library-override reps are promoted off system-override so loc/rot/scale
+    persist as real REPLACE operations.
+    """
+    _ensure_object_override_editable(rep)
     rep.location = orig.location.copy()
     if orig.rotation_mode == "QUATERNION":
         rep.rotation_quaternion = orig.rotation_quaternion.copy()
     else:
         rep.rotation_euler = orig.rotation_euler.copy()
-    rep.scale = orig.scale.copy()
+    if not retain_scale:
+        rep.scale = orig.scale.copy()
+    _flush_object_override_ops(rep)
 
 
 def _has_als_anywhere(orig):
@@ -490,14 +604,16 @@ def _keyed_object_channels(obj):
     return keyed
 
 
-def _copy_unkeyed_object_transform(orig, rep):
-    """Copy orig→rep object loc/rot/scale for axes without keys."""
+def _copy_unkeyed_object_transform(orig, rep, *, retain_scale=False):
+    """Copy orig→rep object loc/rot (and scale when Retain scale is off) for unkeyed axes."""
     if not orig or not rep:
         return 0
+    _ensure_object_override_editable(rep)
     keyed = _keyed_object_channels(orig)
     n = 0
     n += _copy_vector_unkeyed(orig.location, rep.location, keyed.get("location"), 3)
-    n += _copy_vector_unkeyed(orig.scale, rep.scale, keyed.get("scale"), 3)
+    if not retain_scale:
+        n += _copy_vector_unkeyed(orig.scale, rep.scale, keyed.get("scale"), 3)
     rot_keyed = keyed.get("rotation")
     if rot_keyed is None or len(rot_keyed) < _axis_count("rotation", orig.rotation_mode):
         rep.rotation_mode = orig.rotation_mode
@@ -511,7 +627,11 @@ def _copy_unkeyed_object_transform(orig, rep):
         )
     else:
         n += _copy_vector_unkeyed(orig.rotation_euler, rep.rotation_euler, rot_keyed, 3)
-    print(f"[DLM MigNLA] copied unkeyed object axes={n} (keyed={ {k: sorted(v) for k, v in keyed.items()} })")
+    _flush_object_override_ops(rep)
+    print(
+        f"[DLM MigNLA] copied unkeyed object axes={n} "
+        f"(retain_scale={retain_scale}, keyed={ {k: sorted(v) for k, v in keyed.items()} })"
+    )
     return n
 
 
@@ -555,17 +675,55 @@ def _copy_unkeyed_pose(orig, rep):
     return n_bones
 
 
-def _copy_unkeyed_transforms(orig, rep):
+def _copy_unkeyed_transforms(orig, rep, *, retain_scale=False, retain_transforms=False):
     """Copy unkeyed object transform + (if armature) unkeyed pose. Returns (obj_n, bone_n)."""
-    return _copy_unkeyed_object_transform(orig, rep), _copy_unkeyed_pose(orig, rep)
+    if retain_transforms:
+        print("[DLM MigNLA] skipped object transforms (Retain transforms on)")
+        obj_n = 0
+    else:
+        obj_n = _copy_unkeyed_object_transform(orig, rep, retain_scale=retain_scale)
+    return obj_n, _copy_unkeyed_pose(orig, rep)
 
-def run_mig_nla(orig, rep, report=None, context=None):
+
+def _retain_scale_from_context(context):
+    """Read scene Retain scale checkbox."""
+    if context is None:
+        return False
+    props = getattr(context.scene, "dynamic_library_manager", None)
+    return bool(getattr(props, "retarg_retain_scale", False)) if props else False
+
+
+def _retain_transforms_from_context(context):
+    """Read scene MigNLA Retain transforms checkbox."""
+    if context is None:
+        return False
+    props = getattr(context.scene, "dynamic_library_manager", None)
+    return bool(getattr(props, "mignla_retain_transforms", False)) if props else False
+
+
+def run_mig_nla(
+    orig, rep, report=None, context=None, *, retain_scale=None, retain_transforms=None
+):
     """Migrate NLA: copy tracks and strips to replacement; or mirror action slot when no NLA (MigNLA).
     Actions are duplicated so repchar has independent copies.
-    Always copies unkeyed pose (loc/rot/scale) from orig→rep, with or without an action.
+    Copies unkeyed pose. Object transforms skipped when *retain_transforms*;
+    else loc/rot always and scale unless *retain_scale*.
     Pass context so Animation Layers mirroring runs with rep as active object."""
+    if retain_scale is None:
+        retain_scale = _retain_scale_from_context(context)
+    if retain_transforms is None:
+        retain_transforms = _retain_transforms_from_context(context)
+
+    def _unkeyed():
+        return _copy_unkeyed_transforms(
+            orig,
+            rep,
+            retain_scale=retain_scale,
+            retain_transforms=retain_transforms,
+        )
+
     if not orig.animation_data:
-        obj_n, bone_n = _copy_unkeyed_transforms(orig, rep)
+        obj_n, bone_n = _unkeyed()
         if report:
             report(
                 {"INFO"},
@@ -617,7 +775,7 @@ def run_mig_nla(orig, rep, report=None, context=None):
         with _rep_active_for_animlayers(context, rep):
             _mirror_als_turn_on(orig, rep)
             _activate_topmost_als(context, orig, rep)
-        obj_n, bone_n = _copy_unkeyed_transforms(orig, rep)
+        obj_n, bone_n = _unkeyed()
         if report:
             if active_action:
                 report(
@@ -764,7 +922,7 @@ def run_mig_nla(orig, rep, report=None, context=None):
                     rad.use_nla = True
             except Exception as e:
                 print(f"[DLM MigNLA] post-ALS NLA restore skipped: {e}")
-    obj_n, bone_n = _copy_unkeyed_transforms(orig, rep)
+    obj_n, bone_n = _unkeyed()
     if report:
         _debug_als_lookup(orig)
         has_als = _has_als_anywhere(orig)
@@ -1375,13 +1533,13 @@ def run_full_migration(context):
     rep_descendants = descendants(rep)
 
     try:
-        run_copy_attr(orig, rep)
+        retain_scale = bool(getattr(props, "retarg_retain_scale", False)) if props else False
+        run_copy_attr(orig, rep, retain_scale=retain_scale)
         run_mig_nla(orig, rep, context=context)
         run_mig_cust_props(orig, rep)
         run_mig_obj_const(orig, rep, orig_to_rep)
         run_mig_obj_relatives(orig, rep, orig_to_rep, scene=context.scene)
         run_mig_bone_const(orig, rep, orig_to_rep)
-        retain_scale = bool(getattr(props, "retarg_retain_scale", False)) if props else False
         run_retarg_relatives(
             orig, rep, rep_descendants, orig_to_rep, retain_scale=retain_scale
         )
@@ -1392,87 +1550,206 @@ def run_full_migration(context):
 
 
 def run_full_prop_migration(context):
-    """Migrate a non-armature object pair: CopyAttr, MigNLA, MigCustProps, MigObjConst,
-    MigObjRelatives, RetargRelatives. Returns (True, message) or (False, error)."""
-    orig, rep = get_prop_pair(context)
-    if not orig or not rep:
-        return False, "No prop pair (set Original/Replacement Prop)."
-    if orig.type == "ARMATURE" or rep.type == "ARMATURE":
-        return False, "Prop Migrator does not accept armatures (use Character Migrator)."
+    """Migrate a prop Object/Collection pair: CopyAttr (roots), MigNLA/MigCustProps/
+    MigObjConst (all matched), MigObjRelatives (roots), RetargRelatives (full map).
+    Returns (True, message) or (False, error)."""
+    roots, mapping = get_prop_migration_context(context)
+    if not roots or not mapping:
+        return False, "No prop pair (set Object or Collection Original/Replacement)."
 
-    orig_to_rep = {orig: rep}
-    rep_descendants = descendants(rep)
+    props = getattr(context.scene, "dynamic_library_manager", None)
+    retain_scale = bool(getattr(props, "retarg_retain_scale", False)) if props else False
+    primary_orig, primary_rep = roots[0]
     try:
-        run_copy_attr(orig, rep)
-        run_mig_nla(orig, rep, context=context)
-        run_mig_cust_props(orig, rep)
-        run_mig_obj_const(orig, rep, orig_to_rep)
-        run_mig_obj_relatives(orig, rep, orig_to_rep, scene=context.scene)
-        props = getattr(context.scene, "dynamic_library_manager", None)
-        retain_scale = bool(getattr(props, "retarg_retain_scale", False)) if props else False
+        for o, r in roots:
+            run_copy_attr(o, r, retain_scale=retain_scale)
+        for o, r in mapping.items():
+            run_mig_nla(o, r, context=context)
+            run_mig_cust_props(o, r)
+            run_mig_obj_const(o, r, mapping)
+        for o, r in roots:
+            run_mig_obj_relatives(o, r, mapping, scene=context.scene)
         run_retarg_relatives(
-            orig, rep, rep_descendants, orig_to_rep, retain_scale=retain_scale
+            primary_orig,
+            primary_rep,
+            descendants(primary_rep),
+            mapping,
+            retain_scale=retain_scale,
         )
     except Exception as e:
         return False, str(e)
-    return True, f"Prop migrated {orig.name} → {rep.name}"
+    n = len(mapping)
+    return True, f"Prop migrated {n} object pair(s) ({primary_orig.name} → {primary_rep.name})"
 
 
-def run_remove_original_prop(context, orig, rep, report=None):
-    """Remap refs orig→rep, unlink/delete orig prop object, clear original_prop."""
-    from ..utils.remap_usages import remap_object_usages, remap_parents
-    from ..utils.remove_original import _rename_rep_actions
-
-    if not orig or orig.name not in bpy.data.objects:
-        if report:
-            report({"WARNING"}, "No original prop to remove")
-        return False
-    if orig.type == "ARMATURE":
-        if report:
-            report({"ERROR"}, "Use Character Migrator Remove Original for armatures")
-        return False
-    if orig == rep:
-        if report:
-            report({"ERROR"}, "Original and replacement cannot be the same object")
-        return False
-
-    name = orig.name
-    if rep is not None:
-        mapping = {orig: rep}
-        remap_parents(mapping)
-        remap_object_usages(orig, rep, skip_owners={orig})
-
-    # Soft-unlink override props; hard-remove local ones.
-    is_override = getattr(orig, "override_library", None) is not None
-    for coll in list(orig.users_collection):
+def _unlink_or_remove_prop_object(ob, report=None):
+    """Soft-unlink override objects; hard-remove local ones. Returns True on success."""
+    if ob is None or ob.name not in bpy.data.objects:
+        return True
+    name = ob.name
+    is_override = getattr(ob, "override_library", None) is not None
+    for coll in list(ob.users_collection):
         try:
-            coll.objects.unlink(orig)
+            coll.objects.unlink(ob)
         except Exception:
             pass
     if not is_override:
         try:
-            bpy.data.objects.remove(orig, do_unlink=True)
+            bpy.data.objects.remove(ob, do_unlink=True)
         except Exception as e:
             if report:
                 report({"ERROR"}, f"Could not delete {name}: {e}")
             return False
     else:
-        # Leave override datablock; hide so it is gone from the scene.
         try:
-            orig.hide_viewport = True
-            orig.hide_render = True
+            ob.hide_viewport = True
+            ob.hide_render = True
         except Exception:
             pass
+    return True
+
+
+def run_remove_original_prop(context, orig=None, rep=None, report=None):
+    """
+    Remap refs and remove original PropMig target(s).
+
+    Collection mode: remaps the collection object map, then removes the entire
+    original collection (soft-unlink for overrides).
+    Object mode + armature: delegates to Character Migrator Remove Original.
+    Object mode otherwise: remaps hierarchy map and removes each orig-side object.
+    """
+    from ..utils.remap_usages import remap_object_usages, remap_parents
+    from ..utils.remove_original import (
+        _rename_rep_actions,
+        remove_prop_original_collection,
+        run_remove_original,
+    )
 
     props = getattr(context.scene, "dynamic_library_manager", None)
+    mode = getattr(props, "propmig_target", "OBJECT") if props else "OBJECT"
+
+    roots, mapping = get_prop_migration_context(context)
+
+    # Soft fallback: Object mode with only orig set (rep optional).
+    if mapping is None and mode != "COLLECTION":
+        orig = orig or (getattr(props, "original_prop", None) if props else None)
+        rep = rep or (getattr(props, "replacement_prop", None) if props else None)
+        if not orig:
+            if report:
+                report({"WARNING"}, "No original prop to remove")
+            return False
+        if orig == rep:
+            if report:
+                report({"ERROR"}, "Original and replacement cannot be the same object")
+            return False
+        mapping = {orig: rep} if rep is not None else {}
+        roots = [(orig, rep)] if rep is not None else []
+    elif mapping is None:
+        if report:
+            report({"WARNING"}, "No prop collections selected")
+        return False
+
+    primary_orig = roots[0][0] if roots else (orig or next(iter(mapping.keys()), None))
+    primary_rep = roots[0][1] if roots else rep
+
+    # Armature Object mode: full character remove path.
+    if (
+        mode != "COLLECTION"
+        and primary_orig is not None
+        and getattr(primary_orig, "type", None) == "ARMATURE"
+    ):
+        if primary_rep is None or getattr(primary_rep, "type", None) != "ARMATURE":
+            if report:
+                report(
+                    {"ERROR"},
+                    "Armature Remove Original needs an armature replacement "
+                    "(or use Character Migrator)",
+                )
+            return False
+        if props is not None:
+            props.original_character = primary_orig
+            props.replacement_character = primary_rep
+        ok = run_remove_original(context, primary_orig, primary_rep, report)
+        if ok and props is not None:
+            props.original_prop = None
+        return ok
+
+    if mapping:
+        remap_parents(mapping)
+        if primary_orig is not None and primary_rep is not None:
+            remap_object_usages(
+                primary_orig,
+                primary_rep,
+                orig_to_rep=mapping,
+                skip_owners=set(mapping.keys()),
+            )
+
+    # Collection mode: delete/soft-unlink the whole original collection.
+    if mode == "COLLECTION":
+        oc = getattr(props, "original_prop_collection", None) if props else None
+        if oc is None or oc.name not in bpy.data.collections:
+            oc = _collection_for_prop_object(primary_orig, context.scene)
+        if oc is None:
+            if report:
+                report({"WARNING"}, "Could not resolve original collection to remove")
+            return False
+        oc_name = oc.name
+        ok = remove_prop_original_collection(
+            oc, primary_orig, primary_rep, report, scene=context.scene
+        )
+        if not ok:
+            return False
+        if props is not None:
+            props.original_prop_collection = None
+            props.original_prop = None
+        renamed_total = 0
+        seen_rep = set()
+        for r in list(mapping.values()) if mapping else ([primary_rep] if primary_rep else []):
+            if r is None or r in seen_rep:
+                continue
+            seen_rep.add(r)
+            renamed_total += len(_rename_rep_actions(r) or [])
+        if renamed_total and report:
+            report({"INFO"}, f"Renamed {renamed_total} replacement action(s)")
+        if report:
+            report({"INFO"}, f"Removed original prop collection: {oc_name}")
+        return True
+
+    # Remove deepest children first (Object / hierarchy mode).
+    orig_objs = list(mapping.keys()) if mapping else ([primary_orig] if primary_orig else [])
+    orig_objs = [o for o in orig_objs if o is not None and o.name in bpy.data.objects]
+    orig_objs.sort(key=lambda ob: (-sum(1 for _ in _parent_chain(ob)), ob.name))
+    removed_names = []
+    for ob in orig_objs:
+        name = ob.name
+        if not _unlink_or_remove_prop_object(ob, report=report):
+            return False
+        removed_names.append(name)
+
     if props is not None:
         props.original_prop = None
 
-    renamed = _rename_rep_actions(rep)
-    if renamed and report:
-        report({"INFO"}, f"Renamed {len(renamed)} replacement action(s)")
+    renamed_total = 0
+    seen_rep = set()
+    for r in list(mapping.values()) if mapping else ([primary_rep] if primary_rep else []):
+        if r is None or r in seen_rep:
+            continue
+        seen_rep.add(r)
+        renamed_total += len(_rename_rep_actions(r) or [])
+    if renamed_total and report:
+        report({"INFO"}, f"Renamed {renamed_total} replacement action(s)")
 
     if report:
-        mode = "soft-unlinked" if is_override else "deleted"
-        report({"INFO"}, f"Removed original prop {name} ({mode})")
+        report(
+            {"INFO"},
+            f"Removed original prop object(s): {', '.join(removed_names) or '(none)'}",
+        )
     return True
+
+
+def _parent_chain(ob):
+    """Yield parents from immediate to root."""
+    p = getattr(ob, "parent", None)
+    while p:
+        yield p
+        p = p.parent

@@ -68,6 +68,7 @@ class DLM_PT_main_panel(Panel):
             row.operator("dlm.migrator_retarget_relations", text="RetargRelatives", icon="ORIENTATION_PARENT")
             row = box.row()
             row.prop(props, "retarg_retain_scale", text="Retain scale")
+            row.prop(props, "mignla_retain_transforms", text="Retain transforms")
 
             box.separator()
             box.label(text="Situational Fixes", icon="QUESTION")
@@ -113,13 +114,16 @@ class DLM_PT_main_panel(Panel):
                 row = box.row()
                 row.prop(props, "tweak_bake_post_clean", text="Post-clean after bake")
 
-        # Prop Migrator: object-only (meshes, empties, curves — not armatures)
+        # Prop Migrator: Object (any type + hierarchy) or Collection pair
         section_icon = "DISCLOSURE_TRI_DOWN" if props.propmig_section_expanded else "DISCLOSURE_TRI_RIGHT"
         row = layout.row(align=True)
         row.prop(props, "propmig_section_expanded", text="", icon=section_icon, icon_only=True)
         row.label(text="Prop Migrator", icon="OBJECT_DATA")
         if props.propmig_section_expanded:
             box = layout.box()
+            row = box.row()
+            row.prop(props, "propmig_target", expand=True)
+            box.label(text="Bone constraints / tweaks: use Character Migrator")
             row = box.row()
             row.prop(props, "original_prop", text="Original")
             row.operator("dlm.picker_original_prop", text="", icon="EYEDROPPER")
@@ -140,3 +144,4 @@ class DLM_PT_main_panel(Panel):
             row.operator("dlm.prop_migrator_retarget_relations", text="RetargRelatives", icon="ORIENTATION_PARENT")
             row = box.row()
             row.prop(props, "retarg_retain_scale", text="Retain scale")
+            row.prop(props, "mignla_retain_transforms", text="Retain transforms")

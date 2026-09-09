@@ -501,6 +501,97 @@ def remove_unused_override_armatures(keep=None, keep_ids=None):
     return removed
 
 
+def remove_prop_original_collection(coll, orig, rep, report, scene=None):
+    """
+    Remove an entire PropMig original collection (Collection-mode RmOrig).
+
+    Override trees soft-unlink (template-preserving). Local collections are
+    deleted with ``collections.remove``, then exclusive leftover objects.
+    Never deletes IDs still owned by the replacement hierarchy.
+    Returns True on success.
+    """
+    from .remap_usages import (
+        collection_tree_has_overrides,
+        is_library_override_id,
+        needs_template_preserving_remove,
+        override_root_collection,
+    )
+
+    if coll is None or coll.name not in bpy.data.collections:
+        if report:
+            report({"WARNING"}, "No original collection to remove")
+        return False
+
+    scene = scene or bpy.context.scene
+    if rep is not None and _collection_contains_object_recursive(coll, rep):
+        if report:
+            report(
+                {"ERROR"},
+                f"Original collection {coll.name!r} still contains the replacement — abort",
+            )
+        return False
+
+    soft_remove = needs_template_preserving_remove(orig, rep, coll, scene)
+    if not soft_remove and (
+        is_library_override_id(coll) or collection_tree_has_overrides(coll)
+    ):
+        soft_remove = True
+
+    doomed = set(_all_objects_in_collection(coll))
+    if orig is not None:
+        doomed.add(orig)
+    keep = set()
+    if rep is not None:
+        keep.add(rep)
+        rep_data = getattr(rep, "data", None)
+        if rep_data is not None:
+            keep.add(rep_data)
+        rep_root = override_root_collection(rep, scene)
+        if rep_root is not None:
+            keep |= _all_objects_in_collection(rep_root)
+        for ob in list(keep):
+            data = getattr(ob, "data", None)
+            if data is not None:
+                keep.add(data)
+    doomed -= keep
+
+    coll_name = coll.name
+    try:
+        if soft_remove:
+            _remove_orig_sibling_override_instance(orig, coll, report)
+        else:
+            bpy.data.collections.remove(coll)
+            if report:
+                report({"INFO"}, f"Removed collection: {coll_name}")
+            removed_extra = 0
+            for ob in list(doomed):
+                if ob is None:
+                    continue
+                try:
+                    if ob in keep or ob == rep:
+                        continue
+                    if is_library_override_id(ob):
+                        continue
+                    _ = ob.name
+                except ReferenceError:
+                    continue
+                try:
+                    bpy.data.objects.remove(ob, do_unlink=True)
+                    removed_extra += 1
+                except Exception:
+                    pass
+            if removed_extra and report:
+                report(
+                    {"INFO"},
+                    f"Removed {removed_extra} leftover object(s) from original collection",
+                )
+    except Exception as e:
+        if report:
+            report({"ERROR"}, f"Failed to remove original collection {coll_name}: {e}")
+        return False
+    return True
+
+
 def _unlink_collection_from_parents(coll):
     """Remove coll from every parent collection; keep the override datablock."""
     if coll is None:

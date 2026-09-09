@@ -386,32 +386,94 @@ def _override_reference(ob):
     return getattr(ol, "reference", None)
 
 
-def build_override_collection_object_map(orig, rep, scene=None):
+def _is_rig_widget(ob):
+    """True for Rigify/ARP widget meshes that should not role-match as prop roots."""
+    if ob is None:
+        return False
+    name = (ob.name or "").upper()
+    if name.startswith("WGT-") or name.startswith("WGT_"):
+        return True
+    for coll in getattr(ob, "users_collection", []) or []:
+        cn = (coll.name or "").upper()
+        if cn.startswith("WGTS_") or cn.startswith("WGTS-"):
+            return True
+    return False
+
+
+def _match_unique_roles(orig_objs, rep_objs, mapping):
     """
-    Map objects in orig's override/asset collection to matching objects in rep's.
+    When names diverge across asset versions, pair unique roles 1:1.
 
-    Primary match: shared ``override_library.reference`` (correct for GEO-GOCART /
-    Jiffy.### pairs across two instances of the same linked asset).
+    - Unique ARMATURE on each side (e.g. Armature.001 ↔ RIG-pallete-wrap)
+    - Unique non-widget MESH root on each side (parent outside the set /
+      None), e.g. wood-pallette.001 ↔ pallete
 
-    Fallback: exact name, then unique base name after stripping a single ``.###``
-    suffix (only when that base is unique on both sides — avoids collapsing
-    intentional Jiffy / Jiffy.001 siblings).
-
-    Returns {orig_ob: rep_ob}.
+    Does not overwrite existing name/override matches.
     """
-    scene = scene or bpy.context.scene
+    matched_orig = set(mapping.keys())
+    matched_rep = set(mapping.values())
+    orig_set = set(orig_objs)
+    rep_set = set(rep_objs)
+
+    def unmatched(objs, done):
+        return [o for o in objs if o not in done]
+
+    def is_set_root(ob, side_set):
+        p = getattr(ob, "parent", None)
+        return p is None or p not in side_set
+
+    o_arms = [o for o in unmatched(orig_objs, matched_orig) if o.type == "ARMATURE"]
+    r_arms = [o for o in unmatched(rep_objs, matched_rep) if o.type == "ARMATURE"]
+    if len(o_arms) == 1 and len(r_arms) == 1 and o_arms[0] != r_arms[0]:
+        mapping[o_arms[0]] = r_arms[0]
+        matched_orig.add(o_arms[0])
+        matched_rep.add(r_arms[0])
+        print(
+            f"[DLM remap] role-match armature "
+            f"{o_arms[0].name!r}->{r_arms[0].name!r}"
+        )
+
+    o_mesh_roots = [
+        o
+        for o in unmatched(orig_objs, matched_orig)
+        if o.type == "MESH"
+        and not _is_rig_widget(o)
+        and is_set_root(o, orig_set)
+    ]
+    r_mesh_roots = [
+        o
+        for o in unmatched(rep_objs, matched_rep)
+        if o.type == "MESH"
+        and not _is_rig_widget(o)
+        and is_set_root(o, rep_set)
+    ]
+    if (
+        len(o_mesh_roots) == 1
+        and len(r_mesh_roots) == 1
+        and o_mesh_roots[0] != r_mesh_roots[0]
+    ):
+        mapping[o_mesh_roots[0]] = r_mesh_roots[0]
+        print(
+            f"[DLM remap] role-match mesh root "
+            f"{o_mesh_roots[0].name!r}->{r_mesh_roots[0].name!r}"
+        )
+
+    return mapping
+
+
+def _match_object_lists(orig_objs, rep_objs):
+    """
+    Match orig→rep objects by override reference, exact name, then unique base.
+
+    Base match strips one Blender ``.###`` suffix and only pairs when that base is
+    unique on both sides (avoids collapsing intentional Jiffy / Jiffy.001 siblings).
+
+    Finally tries unique role matches (single armature, single mesh root) when
+    asset versions rename objects but keep the same topology roles.
+    """
     mapping = {}
-    if orig is None or rep is None or orig == rep:
+    if not orig_objs or not rep_objs:
         return mapping
-
-    orig_root = override_root_collection(orig, scene)
-    rep_root = override_root_collection(rep, scene)
-    if orig_root is None or rep_root is None or orig_root == rep_root:
-        mapping[orig] = rep
-        return mapping
-
-    orig_objs = _objects_in_collection_recursive(orig_root)
-    rep_objs = _objects_in_collection_recursive(rep_root)
     rep_set = set(rep_objs)
 
     # 1) Library-override reference (best 1:1 across instances).
@@ -449,7 +511,7 @@ def build_override_collection_object_map(orig, rep, scene=None):
             matched_orig.add(o)
             matched_rep.add(cands[0])
 
-    # 3) Unique base-name match (strip one .###) — only if base is unique on both sides.
+    # 3) Unique base-name match (strip one .###).
     orig_by_base = {}
     rep_by_base = {}
     for o in orig_objs:
@@ -468,7 +530,131 @@ def build_override_collection_object_map(orig, rep, scene=None):
         if len(rlist) != 1:
             continue
         mapping[olist[0]] = rlist[0]
+        matched_orig.add(olist[0])
+        matched_rep.add(rlist[0])
 
+    # 4) Unique role fallback (renamed assets / asymmetric parenting).
+    _match_unique_roles(orig_objs, rep_objs, mapping)
+    return mapping
+
+
+def _object_descendants(root):
+    """Objects whose parent chain leads to *root*."""
+    out = set()
+    if root is None:
+        return out
+    for ob in bpy.data.objects:
+        p = ob.parent
+        while p:
+            if p == root:
+                out.add(ob)
+                break
+            p = p.parent
+    return out
+
+
+def migration_root_pairs(mapping):
+    """
+    (orig, rep) pairs that should receive CopyAttr / MigObjRelatives.
+
+    Orig must be a root relative to the mapped set (no parent in mapping keys).
+    Additionally, if *rep* is already parented under another mapped replacement
+    (asymmetric rigs: independent Armature.001 vs RIG parented under pallete),
+    skip CopyAttr/reparent so nested rep hierarchy stays intact — MigNLA still
+    runs on that pair via the full mapping.
+    """
+    if not mapping:
+        return []
+    orig_side = set(mapping.keys())
+    rep_side = set(mapping.values())
+    roots = []
+    for o, r in mapping.items():
+        if o is None or r is None:
+            continue
+        o_parent = getattr(o, "parent", None)
+        if o_parent is not None and o_parent in orig_side:
+            continue
+        r_parent = getattr(r, "parent", None)
+        if r_parent is not None and r_parent in rep_side:
+            print(
+                f"[DLM remap] skip CopyAttr/relatives root {o.name!r}->{r.name!r} "
+                f"(rep parented under mapped {r_parent.name!r})"
+            )
+            continue
+        roots.append((o, r))
+    return roots
+
+
+def build_collection_object_map(orig_coll, rep_coll):
+    """
+    Map objects under *orig_coll* to matches under *rep_coll* (recursive).
+
+    Same matching rules as override-collection maps. Returns {orig_ob: rep_ob}.
+    """
+    mapping = {}
+    if orig_coll is None or rep_coll is None or orig_coll == rep_coll:
+        return mapping
+    orig_objs = _objects_in_collection_recursive(orig_coll)
+    rep_objs = _objects_in_collection_recursive(rep_coll)
+    mapping = _match_object_lists(orig_objs, rep_objs)
+    preview = ", ".join(f"{a.name}->{b.name}" for a, b in list(mapping.items())[:8])
+    print(
+        f"[DLM remap] collection map {orig_coll.name!r}->{rep_coll.name!r}: "
+        f"{len(mapping)} object(s) ({preview}{'...' if len(mapping) > 8 else ''})"
+    )
+    return mapping
+
+
+def build_hierarchy_object_map(orig, rep):
+    """
+    Map *orig* and its parented descendants to *rep* and matching descendants.
+
+    Always forces ``mapping[orig] = rep``. Other pairs use override-ref / name /
+    unique-base matching. Returns {orig_ob: rep_ob}.
+    """
+    mapping = {}
+    if orig is None or rep is None or orig == rep:
+        return mapping
+    orig_objs = [orig] + list(_object_descendants(orig))
+    rep_objs = [rep] + list(_object_descendants(rep))
+    mapping = _match_object_lists(orig_objs, rep_objs)
+    mapping[orig] = rep
+    preview = ", ".join(f"{a.name}->{b.name}" for a, b in list(mapping.items())[:8])
+    print(
+        f"[DLM remap] hierarchy map {orig.name!r}->{rep.name!r}: "
+        f"{len(mapping)} object(s) ({preview}{'...' if len(mapping) > 8 else ''})"
+    )
+    return mapping
+
+
+def build_override_collection_object_map(orig, rep, scene=None):
+    """
+    Map objects in orig's override/asset collection to matching objects in rep's.
+
+    Primary match: shared ``override_library.reference`` (correct for GEO-GOCART /
+    Jiffy.### pairs across two instances of the same linked asset).
+
+    Fallback: exact name, then unique base name after stripping a single ``.###``
+    suffix (only when that base is unique on both sides — avoids collapsing
+    intentional Jiffy / Jiffy.001 siblings).
+
+    Returns {orig_ob: rep_ob}.
+    """
+    scene = scene or bpy.context.scene
+    mapping = {}
+    if orig is None or rep is None or orig == rep:
+        return mapping
+
+    orig_root = override_root_collection(orig, scene)
+    rep_root = override_root_collection(rep, scene)
+    if orig_root is None or rep_root is None or orig_root == rep_root:
+        mapping[orig] = rep
+        return mapping
+
+    mapping = _match_object_lists(
+        _objects_in_collection_recursive(orig_root),
+        _objects_in_collection_recursive(rep_root),
+    )
     mapping[orig] = rep
     preview = ", ".join(f"{a.name}->{b.name}" for a, b in list(mapping.items())[:8])
     print(
