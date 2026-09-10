@@ -168,36 +168,41 @@ def copy_fk_rotations(context, orig, rep):
 
 
 def _iter_action_fcurves(action):
-    """Yield fcurves from legacy and slotted (Blender 4.4+/5) actions."""
+    """Yield fcurves from legacy and slotted (Blender 4.4+/5) actions.
+
+    Channelbag ``fcurves`` iterators recycle RNA wrappers, so ``id(fc)`` is not
+    unique across items — never dedupe by identity. Materialize each collection
+    before yielding so callers can safely read ``data_path`` while iterating.
+    """
+    if action is None:
+        return
     seen = set()
 
-    def _from_bags(bags):
-        for cb in bags or []:
-            for fc in getattr(cb, "fcurves", []) or []:
-                fid = id(fc)
-                if fid not in seen:
-                    seen.add(fid)
-                    yield fc
+    def _emit(curves):
+        for fc in curves:
+            key = (getattr(fc, "data_path", None), int(getattr(fc, "array_index", 0) or 0))
+            if key in seen:
+                continue
+            seen.add(key)
+            yield fc
 
     if hasattr(action, "layers"):
         try:
             for layer in action.layers:
                 for strip in getattr(layer, "strips", []) or []:
-                    yield from _from_bags(getattr(strip, "channelbags", None))
+                    for cb in getattr(strip, "channelbags", None) or []:
+                        yield from _emit(list(getattr(cb, "fcurves", []) or []))
         except Exception:
             pass
     if hasattr(action, "channelbags"):
         try:
-            yield from _from_bags(action.channelbags)
+            for cb in action.channelbags:
+                yield from _emit(list(getattr(cb, "fcurves", []) or []))
         except Exception:
             pass
     if hasattr(action, "fcurves"):
         try:
-            for fc in action.fcurves:
-                fid = id(fc)
-                if fid not in seen:
-                    seen.add(fid)
-                    yield fc
+            yield from _emit(list(action.fcurves))
         except Exception:
             pass
 

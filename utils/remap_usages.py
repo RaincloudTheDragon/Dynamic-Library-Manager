@@ -28,7 +28,7 @@ def _time_remap_identity(scene=None):
 
     With Map Old/New ≠ 1:1, ``scene.frame_set(N)`` evaluates actions at
     ``frame_current_final`` (e.g. 36 → 112.5 when 100/32). Retarget must sample
-    and rewrite keys in *action* time, not remapped time.
+    and rewrite keys in *action* time, not remapped time. Always restored.
     """
     scene = scene or bpy.context.scene
     render = scene.render
@@ -875,19 +875,23 @@ def _set_keyframe_value(kp, new_y: float) -> None:
 
 
 def _iter_action_fcurves(action):
-    """Yield f-curves from legacy actions and Blender 5 action layers."""
+    """Yield f-curves from legacy actions and Blender 5 action layers.
+
+    Materialize each ``fcurves`` collection — Blender may recycle RNA wrappers
+    while iterating, which breaks identity-based walks and mid-loop property reads.
+    """
     if action is None:
         return
     legacy = getattr(action, "fcurves", None)
     if legacy is not None:
-        for fc in legacy:
+        for fc in list(legacy):
             yield fc
     for layer in getattr(action, "layers", []) or []:
         for strip in getattr(layer, "strips", []) or []:
             if getattr(strip, "type", None) != "KEYFRAME":
                 continue
             for cb in getattr(strip, "channelbags", []) or []:
-                for fc in getattr(cb, "fcurves", []) or []:
+                for fc in list(getattr(cb, "fcurves", []) or []):
                     yield fc
 
 
@@ -1080,8 +1084,14 @@ def _fcurve_value_at_frame(fc, frame: float) -> float:
     return float(fc.evaluate(frame))
 
 
+_POSE_TRANSFORM_RE = re.compile(
+    r'^pose\.bones\["([^"]+)"\]\.(location|scale|rotation_euler|'
+    r"rotation_quaternion|rotation_axis_angle)$"
+)
+
+
 def _apply_action_transform_channels(ob, frame: float | None = None) -> bool:
-    """Write evaluated transform fcurve values onto *ob* RNA (clears orange dirty channels)."""
+    """Write evaluated transform fcurve values onto *ob* / pose-bone RNA."""
     ad = getattr(ob, "animation_data", None)
     if ad is None or ad.action is None:
         return False
@@ -1091,6 +1101,7 @@ def _apply_action_transform_channels(ob, frame: float | None = None) -> bool:
             frame = _scene_action_time()
         except Exception:
             frame = 0.0
+    pose = getattr(ob, "pose", None)
     applied = False
     for fc in _iter_action_fcurves(ad.action):
         path = getattr(fc, "data_path", "") or ""
@@ -1115,9 +1126,64 @@ def _apply_action_transform_channels(ob, frame: float | None = None) -> bool:
             elif path == "rotation_axis_angle":
                 ob.rotation_axis_angle[idx] = val
                 applied = True
+            else:
+                m = _POSE_TRANSFORM_RE.match(path)
+                if m is None or pose is None:
+                    continue
+                pb = pose.bones.get(m.group(1))
+                if pb is None:
+                    continue
+                prop = m.group(2)
+                if prop == "location":
+                    pb.location[idx] = val
+                elif prop == "scale":
+                    pb.scale[idx] = val
+                elif prop == "rotation_euler":
+                    pb.rotation_euler[idx] = val
+                elif prop == "rotation_quaternion":
+                    pb.rotation_quaternion[idx] = val
+                elif prop == "rotation_axis_angle":
+                    pb.rotation_axis_angle[idx] = val
+                else:
+                    continue
+                applied = True
         except Exception:
             continue
     return applied
+
+
+def sync_animsys_to_rna(ob, scene=None) -> None:
+    """
+    Force a depsgraph anim eval so object/pose RNA matches what scrub will play.
+
+    Does not paint scene-frame key values over remapped evaluation — that looked
+    clean until the user scrubbed. Map Old/New is unchanged; orange vs diamonds
+    under non-1:1 remap is Blender UI vs ``frame_current_final``, not stomped data.
+    """
+    if ob is None:
+        return
+    scene = scene or bpy.context.scene
+    try:
+        scene.frame_set(int(scene.frame_current))
+    except Exception:
+        pass
+    try:
+        bpy.context.view_layer.update()
+    except Exception:
+        pass
+    try:
+        ob.update_tag(refresh={"OBJECT", "DATA"})
+    except TypeError:
+        try:
+            ob.update_tag()
+        except Exception:
+            pass
+    except Exception:
+        pass
+    try:
+        bpy.context.view_layer.update()
+    except Exception:
+        pass
 
 
 def refresh_object_after_relation_edit(ob) -> None:
@@ -1143,25 +1209,15 @@ def refresh_object_after_relation_edit(ob) -> None:
             print(f"[DLM] {ob.name!r} override operations_update failed: {e}")
 
     ad = getattr(ob, "animation_data", None)
-    if ad is not None and ad.action is not None:
-        action = ad.action
-        slot = getattr(ad, "action_slot", None)
-        try:
-            ad.action = None
-            ad.action = action
-            if slot is not None:
-                try:
-                    ad.action_slot = slot
-                except Exception:
-                    pass
-        except Exception:
-            pass
+    # Do not rebind action — that dirties TIME and the next update remaps-eval.
 
-    if _apply_action_transform_channels(ob):
-        print(f"[DLM remap] cleared transform dirt on {ob.name!r} from action keys")
+    if ad is not None and ad.action is not None:
+        # Match animsys at the playhead (frame_current_final when remapped).
+        if _apply_action_transform_channels(ob):
+            print(f"[DLM remap] synced transform RNA on {ob.name!r} to animsys")
 
     try:
-        ob.update_tag(refresh={"OBJECT", "DATA", "TIME"})
+        ob.update_tag(refresh={"OBJECT", "DATA"})
     except TypeError:
         try:
             ob.update_tag()

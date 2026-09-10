@@ -11,7 +11,7 @@ import re
 import bpy
 
 from ..utils import descendants, collection_containing_armature
-from ..utils.remap_usages import remap_object_usages
+from ..utils.remap_usages import remap_object_usages, sync_animsys_to_rna
 from .fk_rotations import _iter_action_fcurves
 
 # pose.bones["Name"].location / rotation_* / scale
@@ -800,6 +800,8 @@ def run_mig_nla(
             _mirror_als_turn_on(orig, rep)
             _activate_topmost_als(context, orig, rep)
         obj_n, bone_n = _unkeyed()
+        # Animsys owns pose RNA (same as after scrub) — do not paint scene-frame keys.
+        sync_animsys_to_rna(rep)
         if report:
             if active_action and has_nla_tracks and not use_nla:
                 report(
@@ -953,6 +955,7 @@ def run_mig_nla(
             except Exception as e:
                 print(f"[DLM MigNLA] post-ALS NLA restore skipped: {e}")
     obj_n, bone_n = _unkeyed()
+    sync_animsys_to_rna(rep)
     if report:
         _debug_als_lookup(orig)
         has_als = _has_als_anywhere(orig)
@@ -1272,6 +1275,7 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep, *, retain_scal
         override_root_collection,
         refresh_object_after_relation_edit,
         reparent_preserve_world_path,
+        sync_animsys_to_rna,
         sync_prop_rep_from_orig,
     )
 
@@ -1335,26 +1339,11 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep, *, retain_scal
                             except Exception:
                                 pass
 
-    # Same flush/rebind we use on the replacement prop — chain objects otherwise keep
-    # unkeyframed matrix_world dirt that turns orange in the UI and can be saved.
-    refresh_object_after_relation_edit(rep)
+    # Sync RNA to animsys (honest vs scrub). Do not paint scene-frame keys over remap.
+    sync_animsys_to_rna(rep)
     for ob in reparented_objs:
         refresh_object_after_relation_edit(ob)
-    try:
-        scene = bpy.context.scene
-        cur = scene.frame_current
-        bpy.context.view_layer.update()
-        for ob in reparented_objs:
-            refresh_object_after_relation_edit(ob)
-        # Single frame touch (not +1/-1): a neighbor frame samples broken handles
-        # and writes orange dirt back onto RNA.
-        scene.frame_set(cur)
-        bpy.context.view_layer.update()
-        for ob in reparented_objs:
-            refresh_object_after_relation_edit(ob)
-        bpy.context.view_layer.update()
-    except Exception:
-        pass
+        sync_animsys_to_rna(ob)
 
     # Collection instances pointing at orig's asset root → rep's root.
     orig_root = override_root_collection(orig)
