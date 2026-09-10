@@ -124,6 +124,7 @@ def run_symlinker(
     stub_mode: str = "copy",
     ssh: dict[str, Any] | None = None,
     subst_drives: bool = False,
+    search_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     """Call path_symlinker via subprocess with payload next to the session."""
     payload_file = os.path.join(session_dir, "payload.json")
@@ -137,6 +138,11 @@ def run_symlinker(
             "modern_path": p.get("modern_path", ""),
             "kind": p.get("kind", "library"),
             "stub_mode": p.get("stub_mode") or stub_mode,
+            "companion": bool(p.get("companion")),
+            "requires_armature_data": bool(p.get("requires_armature_data", False)),
+            "basename": p.get("basename") or "",
+            "id_name": p.get("id_name") or "",
+            "stored_path": p.get("stored_path") or "",
         }
         for p in pairs
         if p.get("archaic_path") and (action == "teardown" or p.get("modern_path"))
@@ -149,6 +155,7 @@ def run_symlinker(
             "stub_mode": stub_mode,
             "subst_drives": bool(subst_drives) if os.name == "nt" else False,
             "session_dir": session_dir,
+            "search_roots": list(search_roots or []),
             "ssh": {
                 "host": ssh.get("host") or "",
                 "unc_to_posix": ssh.get("unc_to_posix") or {},
@@ -1221,9 +1228,11 @@ class SymlinkPropagationApp(tk.Tk):
             stub_mode=mode,
             ssh=ssh,
             subst_drives=self.subst_drives.get(),
+            search_roots=[r for r in self.search_roots if (r or "").strip()],
         )
         failed = result.get("failed") or []
         created = result.get("created") or []
+        companions = result.get("companions") or []
         if not result.get("ok") and not created:
             self.action_btn.configure(state=tk.NORMAL)
             detail = result.get("error") or ""
@@ -1238,13 +1247,15 @@ class SymlinkPropagationApp(tk.Tk):
             self.status_var.set("Stub create failed.")
             return
 
+        # Expanded pairs from symlinker (includes link-chain companions).
+        expanded = list(result.get("pairs") or pairs)
         # Only keep pairs Windows can actually load (created list already excludes fails).
         created_arch = {
             (c.get("archaic_path") or "").replace("/", "\\").upper() for c in created
         }
         ready_pairs = [
             p
-            for p in pairs
+            for p in expanded
             if (p.get("archaic_path") or "").replace("/", "\\").upper() in created_arch
         ]
         if failed:
@@ -1263,13 +1274,22 @@ class SymlinkPropagationApp(tk.Tk):
             self.status_var.set("No stubs visible to Windows — nothing to Remap.")
             return
 
+        n_comp = len(companions)
+        msg = f"created={len(created)} failed={len(failed)}"
+        if n_comp:
+            msg += f" companions={n_comp}"
         self.session["pairs"] = ready_pairs
         self.session["status"] = STATUS_STUBS_READY
         self.session["stub_mode"] = mode
         self.session["subst_drives"] = bool(self.subst_drives.get())
-        self.session["message"] = f"created={len(created)} failed={len(failed)}"
+        self.session["message"] = msg
         self.session["search_roots"] = list(self.search_roots)
         save_session(self.session_file, self.session)
+        if n_comp:
+            self.status_var.set(
+                f"Stubs ready (+{n_comp} link-chain companion(s)). "
+                "In Blender: Revert → verify → Remap."
+            )
         self._set_phase_waiting_blender()
 
     def _start_poll(self) -> None:

@@ -920,6 +920,112 @@ def resolve_stub_mode(pair: dict[str, Any], default_mode: str) -> str:
     return "native"
 
 
+def expand_link_chain_pairs(
+    pairs: list[dict[str, Any]],
+    *,
+    search_roots: list[str] | None = None,
+    default_mode: str = "copy",
+    max_depth: int = 4,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    Grow *pairs* with companion stubs for nested Library links.
+
+    For each modern hit, read nested lib paths from the .blend. Resolve each
+    stored path against the archaic parent (Revert/stub load) and against the
+    modern parent (post-Remap relative resolve). When that path is missing on
+    disk, add a companion pair pointing at the real modern companion file.
+    Never overwrites existing files (create_* already refuse clobber).
+
+    Returns (expanded_pairs, companion_pairs_added).
+    """
+    from blend_lib_paths import (
+        find_basename_in_roots,
+        library_link_paths,
+        resolve_blend_stored_path,
+    )
+
+    roots = [r for r in (search_roots or []) if (r or "").strip()]
+    modern_pool = [p.get("modern_path") or "" for p in pairs if p.get("modern_path")]
+    by_archaic = {
+        norm(p.get("archaic_path") or "").upper(): dict(p)
+        for p in pairs
+        if p.get("archaic_path") and p.get("modern_path")
+    }
+    companions: list[dict[str, Any]] = []
+    queue = [
+        (dict(p), 0)
+        for p in pairs
+        if p.get("archaic_path") and p.get("modern_path")
+    ]
+
+    while queue:
+        parent, depth = queue.pop(0)
+        if depth >= max_depth:
+            continue
+        archaic_p = parent.get("archaic_path") or ""
+        modern_p = parent.get("modern_path") or ""
+        if not os.path.isfile(modern_p):
+            continue
+        try:
+            nested = library_link_paths(modern_p)
+        except Exception:
+            nested = []
+        mode = resolve_stub_mode(parent, default_mode)
+        for stored in nested:
+            basename = os.path.basename(stored.replace("\\", "/"))
+            modern_resolved = resolve_blend_stored_path(stored, modern_p)
+            archaic_resolved = resolve_blend_stored_path(stored, archaic_p)
+            # Prefer file next to modern parent; else basename search.
+            modern_c = ""
+            if modern_resolved and os.path.isfile(modern_resolved):
+                modern_c = modern_resolved
+            else:
+                modern_c = find_basename_in_roots(
+                    basename, roots, prefer=modern_pool
+                )
+            if not modern_c or not os.path.isfile(modern_c):
+                continue
+            if norm(modern_c).upper() == norm(modern_p).upper():
+                continue
+
+            # Stub wherever Blender will look and the file is absent.
+            targets: list[str] = []
+            for candidate in (archaic_resolved, modern_resolved):
+                if not candidate:
+                    continue
+                if norm(candidate).upper() == norm(modern_c).upper():
+                    continue
+                if os.path.lexists(candidate):
+                    # No overwrites — existing file/link wins.
+                    continue
+                targets.append(candidate)
+
+            for archaic_c in targets:
+                key = norm(archaic_c).upper()
+                if key in by_archaic:
+                    continue
+                companion = {
+                    "archaic_path": archaic_c,
+                    "modern_path": modern_c,
+                    "kind": "library",
+                    "stub_mode": mode,
+                    "companion": True,
+                    "companion_of": archaic_p,
+                    "stored_path": stored,
+                    "basename": basename,
+                    "id_name": basename,
+                    "requires_armature_data": False,
+                    "is_armature": False,
+                }
+                by_archaic[key] = companion
+                companions.append(companion)
+                modern_pool.append(modern_c)
+                queue.append((companion, depth + 1))
+
+    expanded = list(pairs) + companions
+    return expanded, companions
+
+
 def merge_ssh(payload_ssh: dict[str, Any] | None) -> dict[str, Any]:
     cfg = load_ssh_config()
     ssh = {
@@ -941,11 +1047,18 @@ def run_create(
     default_mode: str = "copy",
     subst_drives: bool = False,
     session_dir: str | None = None,
+    search_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     created = []
     failed = []
     stubs = load_manifest(manifest_file)
     by_archaic = {norm(s["archaic_path"]).upper(): s for s in stubs}
+
+    pairs, companions = expand_link_chain_pairs(
+        pairs,
+        search_roots=search_roots,
+        default_mode=default_mode,
+    )
 
     phantom_indices: set[int] = set()
     for i, p in enumerate(pairs):
@@ -1051,7 +1164,12 @@ def run_create(
                 failed.append(entry)
 
     save_manifest(manifest_file, list(by_archaic.values()))
-    return {"created": created, "failed": failed}
+    return {
+        "created": created,
+        "failed": failed,
+        "companions": companions,
+        "pairs": pairs,
+    }
 
 
 def run_teardown(
@@ -1172,6 +1290,7 @@ def main(argv: list[str] | None = None) -> int:
     default_mode = (payload.get("stub_mode") or "copy").lower()
     subst_drives = bool(payload.get("subst_drives"))
     session_dir = payload.get("session_dir") or None
+    search_roots = list(payload.get("search_roots") or [])
 
     if action == "teardown":
         out = run_teardown(pairs, args.manifest, ssh)
@@ -1204,6 +1323,7 @@ def main(argv: list[str] | None = None) -> int:
             default_mode=default_mode,
             subst_drives=subst_drives,
             session_dir=session_dir,
+            search_roots=search_roots,
         )
         failed = out.get("failed") or []
         created = out.get("created") or []

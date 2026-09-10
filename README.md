@@ -50,10 +50,10 @@ It is theoretically possible to keep pose data until libraries are relinked, and
 
 By default the wizard lists armature / baked character libraries only. Tick **Propagate non-armature libraries** to include every other missing `.blend` in the same stub/Remap pass (or use Atomic Remap / FMT / External Data for those).
 
-In most cases the library data has not been lost; the libraries are valid, they just cannot be found on load. To load the blendfile as saved, the valid files must sit at the **exact** paths stored in the blendfile — by copying blends into those locations, or by reverting to the right revision in version control (and only if relative paths were used). Absolute paths make this worse on Windows (drive letters, network drives). That workaround was so tedious I automated it as follows:
+In most cases the library data has not been lost; the libraries are valid, they just cannot be found on load. To load the blendfile as saved, the valid files must sit at the **exact** paths stored in the blendfile — by copying blends into those locations, or by reverting to the right revision in version control (and only if relative paths were used). Absolute paths make this worse on Windows (drive letters, network drives). That workaround was tedious, so I automated it as follows:
 
 1. Set **Default Search Roots** in addon preferences (folders of modern `.blend` files).
-2. Click **Missing Library Propagation**. In the external wizard you can search (or remove) default paths, or add new ones. Optionally enable **Propagate non-armature libraries**. When hits are found, click **Create stubs**. If a library has multiple hits, use **Pick Hit** to choose which result to use.
+2. Click **Missing Library Propagation**. In the external wizard you can search (or remove) default paths, or add new ones. Optionally enable **Propagate non-armature libraries**. When hits are found, click **Create stubs**. If a library has multiple hits, use **Pick Hit** to choose which result to use. Create stubs also walks each hit’s nested Library links and adds **companion stubs** for missing chain deps (e.g. Hard-Hat → materials palette) without overwriting existing files.
 3. When stubs are ready, **Revert**, verify hits, then **Remap** (Remap does not auto-save). I recommend not having Load UI enabled when reverting; it keeps the UI state where you have it so you're not required to open up the DLM tab on the n-panel again.
 4. Return to the wizard and tear down stubs when you are done.
 
