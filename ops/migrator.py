@@ -1240,6 +1240,7 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep, *, retain_scal
     from ..utils.remap_usages import (
         build_override_collection_object_map,
         override_root_collection,
+        refresh_object_after_relation_edit,
         reparent_preserve_world_path,
         sync_prop_rep_from_orig,
     )
@@ -1252,7 +1253,13 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep, *, retain_scal
     mapping.update(collection_map)
     mapping[orig] = rep
 
-    sync_prop_rep_from_orig(orig, rep)
+    sync_prop_rep_from_orig(orig, rep, retain_scale=retain_scale)
+    # Fresh matrix_world before scale-match / reparent decisions (override scale
+    # especially can lag one depsgraph tick and force the crushing identity-MPI path).
+    try:
+        bpy.context.view_layer.update()
+    except Exception:
+        pass
 
     # Armature's own parent (cart/path empty) is MigObjRelatives — not duplicated here.
 
@@ -1275,6 +1282,7 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep, *, retain_scal
     candidates -= mapped_srcs
 
     reparented = 0
+    reparented_objs = []
     for ob in candidates:
         if ob.parent in mapping:
             old_parent = ob.parent
@@ -1283,17 +1291,40 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep, *, retain_scal
                 ob, new_parent, old_parent=old_parent, retain_scale=retain_scale
             ):
                 reparented += 1
+                reparented_objs.append(ob)
     if reparented:
         print(f"[DLM RetargRelatives] reparented {reparented} object(s) with world-path preserve")
-        if ob.modifiers:
-            for m in ob.modifiers:
-                for attr in ("object", "target", "mirror_object"):
-                    val = getattr(m, attr, None)
-                    if val in mapping:
-                        try:
-                            setattr(m, attr, mapping[val])
-                        except Exception:
-                            pass
+        for ob in reparented_objs:
+            if ob.modifiers:
+                for m in ob.modifiers:
+                    for attr in ("object", "target", "mirror_object"):
+                        val = getattr(m, attr, None)
+                        if val in mapping:
+                            try:
+                                setattr(m, attr, mapping[val])
+                            except Exception:
+                                pass
+
+    # Same flush/rebind we use on the replacement prop — chain objects otherwise keep
+    # unkeyframed matrix_world dirt that turns orange in the UI and can be saved.
+    refresh_object_after_relation_edit(rep)
+    for ob in reparented_objs:
+        refresh_object_after_relation_edit(ob)
+    try:
+        scene = bpy.context.scene
+        cur = scene.frame_current
+        bpy.context.view_layer.update()
+        for ob in reparented_objs:
+            refresh_object_after_relation_edit(ob)
+        # Single frame touch (not +1/-1): a neighbor frame samples broken handles
+        # and writes orange dirt back onto RNA.
+        scene.frame_set(cur)
+        bpy.context.view_layer.update()
+        for ob in reparented_objs:
+            refresh_object_after_relation_edit(ob)
+        bpy.context.view_layer.update()
+    except Exception:
+        pass
 
     # Collection instances pointing at orig's asset root → rep's root.
     orig_root = override_root_collection(orig)
