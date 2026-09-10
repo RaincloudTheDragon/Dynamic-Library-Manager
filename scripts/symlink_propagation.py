@@ -518,9 +518,10 @@ class SymlinkPropagationApp(tk.Tk):
         self.search_roots: list[str] = list(self.session.get("search_roots") or [])
         if not self.search_roots:
             self.search_roots = [""]
-        self.rows: list[dict[str, Any]] = []
+        # Full list from Blender; self.rows is the filtered view for search/stub.
+        self.all_rows: list[dict[str, Any]] = []
         for m in self.session.get("missing") or []:
-            self.rows.append(
+            self.all_rows.append(
                 {
                     "archaic_path": m.get("archaic_path", ""),
                     "stored_path": m.get("stored_path", ""),
@@ -529,6 +530,10 @@ class SymlinkPropagationApp(tk.Tk):
                     "kind": m.get("kind", "library"),
                     "modern_path": m.get("modern_path", ""),
                     "candidates": [],
+                    "is_armature": bool(m.get("is_armature", m.get("requires_armature_data", True))),
+                    "requires_armature_data": bool(
+                        m.get("requires_armature_data", m.get("is_armature", True))
+                    ),
                 }
             )
         # Restore pairs if re-opening mid session
@@ -536,10 +541,15 @@ class SymlinkPropagationApp(tk.Tk):
             (p.get("archaic_path") or "").upper(): p.get("modern_path", "")
             for p in (self.session.get("pairs") or [])
         }
-        for row in self.rows:
+        for row in self.all_rows:
             mp = by_arch.get(row["archaic_path"].upper(), "")
             if mp:
                 row["modern_path"] = mp
+
+        include_default = bool(self.session.get("include_non_armature", False))
+        self.include_non_armature = tk.BooleanVar(value=include_default)
+        self.rows: list[dict[str, Any]] = []
+        self._apply_row_filter(refresh_tree=False)
 
         subst_default = self.session.get("subst_drives")
         if subst_default is None:
@@ -653,6 +663,25 @@ class SymlinkPropagationApp(tk.Tk):
         )
         ttk.Label(ssh_frame, textvariable=self.ssh_map_var, wraplength=900).pack(
             anchor=tk.W, padx=4, pady=2
+        )
+
+        scope_row = ttk.Frame(top)
+        scope_row.pack(fill=tk.X, pady=(4, 0))
+        n_other = sum(1 for r in self.all_rows if not r.get("is_armature"))
+        cb_non_arm = ttk.Checkbutton(
+            scope_row,
+            text="Propagate non-armature libraries",
+            variable=self.include_non_armature,
+            command=self._on_include_non_armature_toggle,
+        )
+        cb_non_arm.pack(side=tk.LEFT)
+        WidgetHoverTip(
+            cb_non_arm,
+            "Off (default): only missing armature / baked character libraries "
+            "(pose data is lost if those libs are absent on load).\n\n"
+            "On: also stub every other missing .blend library — use when "
+            "non-armature library overrides drop data if the lib is missing on reload.\n\n"
+            f"{n_other} non-armature missing librar(ies) in this session.",
         )
 
         mid = ttk.Frame(self)
@@ -869,6 +898,41 @@ class SymlinkPropagationApp(tk.Tk):
 
         return ""
 
+    def _apply_row_filter(self, *, refresh_tree: bool = True) -> None:
+        """Set self.rows from all_rows based on the non-armature checkbox."""
+        include = bool(self.include_non_armature.get())
+        if include:
+            self.rows = list(self.all_rows)
+        else:
+            self.rows = [r for r in self.all_rows if r.get("is_armature")]
+        self.session["include_non_armature"] = include
+        save_session(self.session_file, self.session)
+        if refresh_tree and getattr(self, "tree", None) is not None:
+            self._refresh_tree()
+            self._update_filter_status()
+
+    def _on_include_non_armature_toggle(self) -> None:
+        self._apply_row_filter(refresh_tree=True)
+
+    def _update_filter_status(self) -> None:
+        n_all = len(self.all_rows)
+        n_show = len(self.rows)
+        n_hidden = n_all - n_show
+        if self.include_non_armature.get():
+            self.status_var.set(
+                f"{n_show} missing libraries (including non-armature). "
+                "Search, Auto-map POSIX (for SMB), then Create stubs."
+            )
+        elif n_hidden:
+            self.status_var.set(
+                f"{n_show} armature libraries ({n_hidden} non-armature hidden). "
+                "Search, Auto-map POSIX (for SMB), then Create stubs."
+            )
+        else:
+            self.status_var.set(
+                f"{n_show} missing libraries. Search, Auto-map POSIX (for SMB), then Create stubs."
+            )
+
     def _refresh_tree(self) -> None:
         self.tree.delete(*self.tree.get_children())
         for i, row in enumerate(self.rows):
@@ -1066,6 +1130,8 @@ class SymlinkPropagationApp(tk.Tk):
                 "kind": r.get("kind") or "library",
                 "needs_stub": True,
                 "stub_mode": mode,
+                "is_armature": bool(r.get("is_armature")),
+                "requires_armature_data": bool(r.get("requires_armature_data")),
             }
             for r in self.rows
             if r.get("archaic_path") and r.get("modern_path")
@@ -1079,9 +1145,7 @@ class SymlinkPropagationApp(tk.Tk):
             "then Revert and Remap in Blender (Remap does not save). "
             "Only removes/replaces symlinks — never real files."
         )
-        self.status_var.set(
-            f"{len(self.rows)} missing libraries. Search, Auto-map POSIX (for SMB), then Create stubs."
-        )
+        self._update_filter_status()
 
     def _set_phase_waiting_blender(self) -> None:
         self.action_btn.configure(text="Waiting for Blender…", state=tk.DISABLED)

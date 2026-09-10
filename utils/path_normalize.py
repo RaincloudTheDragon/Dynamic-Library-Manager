@@ -99,20 +99,14 @@ def library_is_baked_character_path(lib) -> bool:
 
 def collect_missing_libraries() -> list[dict[str, Any]]:
     """
-    Missing libraries that need Missing Library Propagation (unique by absolute path).
+    All missing .blend libraries (unique by absolute path).
 
-    Includes:
-      - libs that link armatures (pose loss on missing load — Blender #143902)
-      - baked character libs (*_baked / Characters-Baked) even when no IDs loaded
-        (failed load often leaves an empty library entry that still must rempath)
-
-    Other missing links: Atomic Remap / FMT / File → External Data.
+    Each entry is tagged with ``is_armature`` / ``requires_armature_data`` so the
+    wizard can default to armature/baked rows and optionally include the rest.
     """
     out = []
     seen = set()
     for lib in bpy.data.libraries:
-        if not (library_links_armature(lib) or library_is_baked_character_path(lib)):
-            continue
         raw = getattr(lib, "filepath", "") or ""
         if not raw:
             continue
@@ -125,6 +119,7 @@ def collect_missing_libraries() -> list[dict[str, Any]]:
         seen.add(key)
         if os.path.isfile(archaic):
             continue
+        is_arm = library_links_armature(lib) or library_is_baked_character_path(lib)
         out.append(
             {
                 "archaic_path": archaic,
@@ -133,6 +128,9 @@ def collect_missing_libraries() -> list[dict[str, Any]]:
                 "id_name": lib.name,
                 "kind": "library",
                 "modern_path": "",
+                "is_armature": bool(is_arm),
+                # Remap readiness: armature/baked rows must expose armature data after stub load.
+                "requires_armature_data": bool(is_arm),
             }
         )
     return out
@@ -323,7 +321,12 @@ def remap_readiness(plan: list[dict[str, Any]]) -> tuple[bool, str]:
         if getattr(lib, "is_missing", False):
             still_missing.append(lib.name)
             continue
-        if not (library_links_armature(lib) or library_is_baked_character_path(lib)):
+        # Armature/baked rows must expose armature data after stub load (bad hit).
+        # Non-armature rows (Propagation scope = All) set requires_armature_data False.
+        # Legacy plan rows omit the flag — treat as armature-scoped.
+        if pair.get("requires_armature_data", True) and not (
+            library_links_armature(lib) or library_is_baked_character_path(lib)
+        ):
             no_arm_data.append(lib.name)
             continue
         needing.append(lib.name)

@@ -6,7 +6,7 @@ Officially supports Blender 4.5 LTS to 5.2 LTS.
 
 ## Features
 
-* **Missing Library Propagation** — If libraries containing overridden armatures are not present on load, all their bone data (unkeyed pose data, all bone constraints, possibly some override data) is lost once relinked. This workflow helps the user find the modern paths of the missing blends, creates stubs of missing armature libraries (copy-file by default, SSH/native symlinks on SMB or local), then reload and remap in Blender. Non-armature links stay for Atomic Remap / FMT / External Data search.
+* **Missing Library Propagation** — Stub missing libraries so override/pose data survives rempath. Wizard defaults to armature libs; optional **Propagate non-armature libraries** checkbox includes the rest. Then reload and Remap in Blender.
 * **Character Migrator** — This feature set allows you to migrate a fully animated character in a scene, with a replacement. You can choose a new version of the same character, or replace an entirely different character with another character. The possibilities are (close to) endless! Supports Rigify (especially Character Creator rigs) and Auto-Rig Pro* characters.
 * **Prop Migrator** — The same pipeline for non-armature objects (meshes, empties, curves).
 * **Situational fixes** — Base body shape keys and FK arm/finger rotation copy (with bake). Designed for Character Creator rigs.
@@ -35,7 +35,7 @@ Open **3D Viewport → Sidebar (N) → Dynamic Library Manager**.
 
 ### Missing Library Propagation
 
-This feature is designed for armature libraries only. Pose data is lost if those libraries are missing on load, as documented in [#90924](https://projects.blender.org/blender/blender/issues/90924), [#143902](https://projects.blender.org/blender/blender/issues/143902), and other official Blender issues.
+Pose data is lost if armature libraries are missing on load, as documented in [#90924](https://projects.blender.org/blender/blender/issues/90924), [#143902](https://projects.blender.org/blender/blender/issues/143902), and other official Blender issues. Non-armature library overrides can also drop data when the lib is absent on reload — enable **Propagate non-armature libraries** in the wizard (off by default) to stub those too.
 
 > Pose data is not preserved if Armature data is lost or modified.
 
@@ -48,12 +48,12 @@ The latter cause is irrelevant here: pose data doesn't need to be preserved when
 
 It is theoretically possible to keep pose data until libraries are relinked, and only drop it when the relinked library has modified armature data. With Blender's current logic that is not simple — it would need a deep refactor of how pose data and the Armature ID (and its bones) are linked and handled. The **Core** and **Animation & Rigging** module developers are aware of this and would like to improve it, but it is not on any current milestone. It will likely be years before that refactor happens; it may or may not land in a Winter of Quality, but not in 2026. In the meantime, a workaround is required.
 
-This issue only affects armatures. Libraries that do not link armatures do not lose data in the same circumstance. Any library with no overridden armature in the scene is out of scope — including libraries with overrides only on non-armature objects, and libraries that were never overridden and remain as an instance collection (even if they contain an armature). Only when that armature has an override session **and** is missing will it be targeted by the Propagator.
+By default the wizard lists armature / baked character libraries only. Tick **Propagate non-armature libraries** to include every other missing `.blend` in the same stub/Remap pass (or use Atomic Remap / FMT / External Data for those).
 
-In most cases the armature data has not been lost; the libraries are valid, they just cannot be found on load. To load the blendfile as saved, the valid files must sit at the **exact** paths stored in the blendfile — by copying blends into those locations, or by reverting to the right revision in version control (and only if relative paths were used). Absolute paths make this worse on Windows (drive letters, network drives). That workaround was so tedious I automated it as follows:
+In most cases the library data has not been lost; the libraries are valid, they just cannot be found on load. To load the blendfile as saved, the valid files must sit at the **exact** paths stored in the blendfile — by copying blends into those locations, or by reverting to the right revision in version control (and only if relative paths were used). Absolute paths make this worse on Windows (drive letters, network drives). That workaround was so tedious I automated it as follows:
 
-1. Set **Default Search Roots** in addon preferences (semicolon-separated folders of modern `.blend` files).
-2. Click **Missing Library Propagation**. In the external wizard you can search (or remove) default paths, or add new ones. When hits are found, click **Create stubs**. If a library has multiple hits, use **Pick Hit** to choose which result to use.
+1. Set **Default Search Roots** in addon preferences (folders of modern `.blend` files).
+2. Click **Missing Library Propagation**. In the external wizard you can search (or remove) default paths, or add new ones. Optionally enable **Propagate non-armature libraries**. When hits are found, click **Create stubs**. If a library has multiple hits, use **Pick Hit** to choose which result to use.
 3. When stubs are ready, **Revert**, verify hits, then **Remap** (Remap does not auto-save). I recommend not having Load UI enabled when reverting; it keeps the UI state where you have it so you're not required to open up the DLM tab on the n-panel again.
 4. Return to the wizard and tear down stubs when you are done.
 

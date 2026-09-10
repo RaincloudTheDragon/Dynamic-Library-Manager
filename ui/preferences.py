@@ -141,7 +141,7 @@ class DynamicLibraryManagerPreferences(AddonPreferences):
     def draw(self, context):
         layout = self.layout
         box = layout.box()
-        box.label(text="Missing Library Propagation (armature libs only)")
+        box.label(text="Missing Library Propagation")
         draw_search_path_list(
             box,
             self.symlink_search_paths,
@@ -149,7 +149,7 @@ class DynamicLibraryManagerPreferences(AddonPreferences):
             remove_idname="dlm.prefs_search_root_remove",
         )
         box.label(
-            text="Armature libs only. Others: Atomic Remap (recommended), FMT (images), or blendfile search.",
+            text="Armature libs by default. Non-armature: enable in the wizard checkbox.",
             icon="INFO",
         )
 
