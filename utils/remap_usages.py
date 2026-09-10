@@ -46,6 +46,59 @@ def _time_remap_identity(scene=None):
         render.frame_map_new = new
 
 
+_DLM_REMAP_SCALE_TAG = "dlm_remap_scale"
+
+
+def _scale_action_key_times(action, factor: float) -> int:
+    """Multiply every keyframe/handle X by *factor*. Returns curves touched."""
+    if action is None or abs(factor - 1.0) < 1e-12:
+        return 0
+    seen = set()
+    n = 0
+    for fc in _iter_action_fcurves(action):
+        key = (getattr(fc, "data_path", None), int(getattr(fc, "array_index", 0) or 0))
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            for kp in fc.keyframe_points:
+                kp.co.x *= factor
+                kp.handle_left.x *= factor
+                kp.handle_right.x *= factor
+            if hasattr(fc, "update"):
+                fc.update()
+            n += 1
+        except Exception:
+            continue
+    return n
+
+
+def restore_action_keys_from_time_remap_scale(action) -> bool:
+    """Undo a prior ``dlm_remap_scale`` tag (MigNLA must not leave actions retimed)."""
+    if action is None:
+        return False
+    try:
+        if _DLM_REMAP_SCALE_TAG not in action:
+            return False
+        prev = list(action[_DLM_REMAP_SCALE_TAG])
+        p_old, p_new = int(prev[0]), int(prev[1])
+    except Exception:
+        return False
+    if not p_old:
+        return False
+    n = _scale_action_key_times(action, float(p_new) / float(p_old))
+    try:
+        del action[_DLM_REMAP_SCALE_TAG]
+    except Exception:
+        pass
+    if n:
+        print(
+            f"[DLM] restored {n} fcurve(s) on action {action.name!r} "
+            f"from time-remap scale {p_old}/{p_new}"
+        )
+    return bool(n)
+
+
 def _remap_dbg(msg):
     """Flushed remap progress so stalls show the last completed step."""
     print(f"[DLM remap] {msg}", flush=True)
@@ -1091,21 +1144,30 @@ _POSE_TRANSFORM_RE = re.compile(
 
 
 def _apply_action_transform_channels(ob, frame: float | None = None) -> bool:
-    """Write evaluated transform fcurve values onto *ob* / pose-bone RNA."""
+    """Write evaluated *transform* fcurve values onto *ob* / pose-bone RNA.
+
+    Does not write animated ID properties (e.g. Rigify ``IK_FK``). Assigning those
+    after a remapped ``frame_set`` marks them dirty in the UI; ``frame_set`` alone
+    owns their evaluation (see ``Scene.frame_set`` / Time Stretching docs).
+    """
     ad = getattr(ob, "animation_data", None)
     if ad is None or ad.action is None:
         return False
     if frame is None:
-        # Use remapped action time — matches what frame_set / animsys writes.
         try:
-            frame = _scene_action_time()
+            frame = float(bpy.context.scene.frame_current)
         except Exception:
             frame = 0.0
     pose = getattr(ob, "pose", None)
     applied = False
+    seen = set()
     for fc in _iter_action_fcurves(ad.action):
         path = getattr(fc, "data_path", "") or ""
         idx = int(getattr(fc, "array_index", 0) or 0)
+        dedupe = (path, idx)
+        if dedupe in seen:
+            continue
+        seen.add(dedupe)
         try:
             val = _fcurve_value_at_frame(fc, frame)
         except Exception:
@@ -1152,38 +1214,62 @@ def _apply_action_transform_channels(ob, frame: float | None = None) -> bool:
     return applied
 
 
-def sync_animsys_to_rna(ob, scene=None) -> None:
+def sync_animsys_to_rna(ob, scene=None, *, pair=None) -> None:
     """
-    Force a depsgraph anim eval so object/pose RNA matches what scrub will play.
+    Refresh evaluated RNA via ``scene.frame_set`` — no key retimes, no Map changes.
 
-    Does not paint scene-frame key values over remapped evaluation — that looked
-    clean until the user scrubbed. Map Old/New is unchanged; orange vs diamonds
-    under non-1:1 remap is Blender UI vs ``frame_current_final``, not stomped data.
+    Uses temporary 1:1 Time Stretching only for the ``frame_set`` call so RNA
+    matches key times, then restores the user's Map Old/New. Does not write
+    animated ID props (IK_FK); ``frame_set`` owns those.
+
+    Note: with Map Old≠Map New, Blender will re-dirty keyed ID props on the next
+    scrub/TIME update (eval at ``frame_current_final`` vs keys at ``frame_current``).
+    That is Scene Time Stretching behavior, not something MigNLA can clear while
+    keeping both stretch and scene-space key timing.
     """
     if ob is None:
         return
     scene = scene or bpy.context.scene
-    try:
-        scene.frame_set(int(scene.frame_current))
-    except Exception:
-        pass
-    try:
-        bpy.context.view_layer.update()
-    except Exception:
-        pass
-    try:
-        ob.update_tag(refresh={"OBJECT", "DATA"})
-    except TypeError:
+    for target in (ob, pair):
+        if target is None:
+            continue
+        ad = getattr(target, "animation_data", None)
+        if ad is None:
+            continue
+        if ad.action is not None:
+            restore_action_keys_from_time_remap_scale(ad.action)
+        if getattr(ad, "use_nla", False):
+            for track in getattr(ad, "nla_tracks", []) or []:
+                for strip in getattr(track, "strips", []) or []:
+                    if getattr(strip, "action", None) is not None:
+                        restore_action_keys_from_time_remap_scale(strip.action)
+
+    with _time_remap_identity(scene):
         try:
-            ob.update_tag()
+            scene.frame_set(int(scene.frame_current))
         except Exception:
             pass
-    except Exception:
-        pass
-    try:
-        bpy.context.view_layer.update()
-    except Exception:
-        pass
+        try:
+            bpy.context.view_layer.update()
+        except Exception:
+            pass
+        for target in (ob, pair):
+            if target is None:
+                continue
+            try:
+                target.update_tag(refresh={"OBJECT", "DATA"})
+            except TypeError:
+                try:
+                    target.update_tag()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        try:
+            bpy.context.view_layer.update()
+        except Exception:
+            pass
+    # Map restored — do not frame_set again under stretch (re-dirties ID props).
 
 
 def refresh_object_after_relation_edit(ob) -> None:
@@ -1212,9 +1298,15 @@ def refresh_object_after_relation_edit(ob) -> None:
     # Do not rebind action — that dirties TIME and the next update remaps-eval.
 
     if ad is not None and ad.action is not None:
-        # Match animsys at the playhead (frame_current_final when remapped).
-        if _apply_action_transform_channels(ob):
-            print(f"[DLM remap] synced transform RNA on {ob.name!r} to animsys")
+        # Apply transform keys at scene frame (1:1), not frame_current_final.
+        scene = bpy.context.scene
+        with _time_remap_identity(scene):
+            try:
+                scene.frame_set(int(scene.frame_current))
+            except Exception:
+                pass
+            if _apply_action_transform_channels(ob, float(scene.frame_current)):
+                print(f"[DLM remap] synced transform RNA on {ob.name!r} to keys")
 
     try:
         ob.update_tag(refresh={"OBJECT", "DATA"})

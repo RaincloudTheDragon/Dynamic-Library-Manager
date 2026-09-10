@@ -11,11 +11,18 @@ import re
 import bpy
 
 from ..utils import descendants, collection_containing_armature
-from ..utils.remap_usages import remap_object_usages, sync_animsys_to_rna
+from ..utils.remap_usages import (
+    _time_remap_identity,
+    remap_object_usages,
+    sync_animsys_to_rna,
+)
 from .fk_rotations import _iter_action_fcurves
 
 # pose.bones["Name"].location / rotation_* / scale
 _POSE_CHANNEL_RE = re.compile(r'^pose\.bones\["([^"]+)"\]\.(\w+)')
+# pose.bones["Name"]["IK_FK"] or ["prop"] on the object
+_IDPROP_POSE_RE = re.compile(r'^pose\.bones\["([^"]+)"\]\["([^"]+)"\]')
+_IDPROP_OBJ_RE = re.compile(r'^\["([^"]+)"\]')
 
 
 def _first_view3d_area(context):
@@ -406,9 +413,13 @@ def _duplicate_action(src_action, suffix=".rep"):
     """Duplicate an action, returning the new action with a unique name."""
     if src_action is None:
         return None
+    from ..utils.remap_usages import restore_action_keys_from_time_remap_scale
+
+    # Never migrate a retimed action — timing must match orig exactly.
+    restore_action_keys_from_time_remap_scale(src_action)
     new_name = src_action.name
     if not new_name.endswith(suffix):
-        new_name = f"{new_name}{suffix}"
+        new_name = f"{src_action.name}{suffix}"
     # Ensure unique name
     base_name = new_name
     n = 1
@@ -417,6 +428,7 @@ def _duplicate_action(src_action, suffix=".rep"):
         n += 1
     new_action = src_action.copy()
     new_action.name = new_name
+    restore_action_keys_from_time_remap_scale(new_action)
     return new_action
 
 
@@ -689,6 +701,35 @@ def _copy_unkeyed_transforms(orig, rep, *, retain_scale=False, retain_transforms
     return obj_n, _copy_unkeyed_pose(orig, rep)
 
 
+def _time_stretch_active(scene=None) -> bool:
+    """True when Scene Time Stretching Map Old ≠ Map New."""
+    scene = scene or bpy.context.scene
+    try:
+        return int(scene.render.frame_map_old) != int(scene.render.frame_map_new)
+    except Exception:
+        return False
+
+
+def _warn_time_stretch_keyed_props(report, scene=None) -> None:
+    """Warn that Time Stretching makes keyed ID props (IK_FK) look dirty in the UI."""
+    scene = scene or bpy.context.scene
+    if not _time_stretch_active(scene) or report is None:
+        return
+    try:
+        old = int(scene.render.frame_map_old)
+        new = int(scene.render.frame_map_new)
+    except Exception:
+        old = new = "?"
+    report(
+        {"WARNING"},
+        f"Time Stretching is on (Map Old={old} / Map New={new}). "
+        f"Keyed custom props (e.g. Rigify IK_FK) evaluate at frame_current_final "
+        f"but the UI compares to keys at frame_current — orange dirt and revert "
+        f"will not stick while stretch is active. DLM does not change Map or key times. "
+        f"Use 1:1 Map while editing, or stretch only for render.",
+    )
+
+
 def _retain_scale_from_context(context):
     """Read scene Retain scale checkbox."""
     if context is None:
@@ -723,13 +764,24 @@ def run_mig_nla(
     if retain_transforms is None:
         retain_transforms = _retain_transforms_from_context(context)
 
+    scene = getattr(context, "scene", None) or bpy.context.scene
+    _warn_time_stretch_keyed_props(report, scene)
+
     def _unkeyed():
-        return _copy_unkeyed_transforms(
-            orig,
-            rep,
-            retain_scale=retain_scale,
-            retain_transforms=retain_transforms,
-        )
+        # Read orig pose at scene time (not frame_current_final) so unkeyed
+        # axes match what the playhead/diamonds show under time remapping.
+        with _time_remap_identity(scene) as disabled:
+            if disabled:
+                try:
+                    scene.frame_set(int(scene.frame_current))
+                except Exception:
+                    pass
+            return _copy_unkeyed_transforms(
+                orig,
+                rep,
+                retain_scale=retain_scale,
+                retain_transforms=retain_transforms,
+            )
 
     if not orig.animation_data:
         obj_n, bone_n = _unkeyed()
@@ -800,8 +852,7 @@ def run_mig_nla(
             _mirror_als_turn_on(orig, rep)
             _activate_topmost_als(context, orig, rep)
         obj_n, bone_n = _unkeyed()
-        # Animsys owns pose RNA (same as after scrub) — do not paint scene-frame keys.
-        sync_animsys_to_rna(rep)
+        sync_animsys_to_rna(rep, pair=orig)
         if report:
             if active_action and has_nla_tracks and not use_nla:
                 report(
@@ -955,7 +1006,7 @@ def run_mig_nla(
             except Exception as e:
                 print(f"[DLM MigNLA] post-ALS NLA restore skipped: {e}")
     obj_n, bone_n = _unkeyed()
-    sync_animsys_to_rna(rep)
+    sync_animsys_to_rna(rep, pair=orig)
     if report:
         _debug_als_lookup(orig)
         has_als = _has_als_anywhere(orig)
@@ -981,6 +1032,34 @@ def _is_id_prop_group(val):
     return callable(getattr(val, "keys", None))
 
 
+def _keyed_id_prop_paths(*objects):
+    """FCurve data_paths for custom/id properties on any of *objects* (orig + rep)."""
+    paths = set()
+    for ob in objects:
+        if ob is None:
+            continue
+        for action in _collect_orig_actions(ob):
+            for fc in _iter_action_fcurves(action):
+                path = getattr(fc, "data_path", "") or ""
+                if '["' not in path:
+                    continue
+                if _IDPROP_POSE_RE.match(path) or _IDPROP_OBJ_RE.match(path):
+                    paths.add(path)
+    return paths
+
+
+def _id_prop_is_keyed(keyed_paths, bone_name, key):
+    """True when *key* (or a nested child) is driven by an fcurve."""
+    if bone_name:
+        prefix = f'pose.bones["{bone_name}"]["{key}"]'
+    else:
+        prefix = f'["{key}"]'
+    for path in keyed_paths:
+        if path == prefix or path.startswith(prefix + "["):
+            return True
+    return False
+
+
 def _copy_id_prop_recursive(orig_container, rep_container, key, debug_path="", debug=False):
     """Copy one id property from orig_container[key] into rep_container[key] (recursive for groups)."""
     if key not in orig_container:
@@ -1003,44 +1082,74 @@ def _copy_id_prop_recursive(orig_container, rep_container, key, debug_path="", d
         print(f"[DLM MigCustProps] FAILED {debug_path}.{key!r}: {e}")
 
 
-def _copy_custom_props_from(orig_obj, rep_obj, debug_label="", debug=False):
-    """Copy all custom props from orig_obj to rep_obj (object or pose bone), including nested groups."""
+def _copy_custom_props_from(
+    orig_obj, rep_obj, debug_label="", debug=False, *, keyed_paths=None, bone_name=None
+):
+    """Copy unkeyed custom props from orig_obj to rep_obj (incl. nested groups)."""
+    keyed_paths = keyed_paths or set()
     keys = [k for k in orig_obj.keys() if k not in EXCLUDE_PROPS]
     if debug and keys:
         print(f"[DLM MigCustProps] {debug_label} keys: {keys}")
     for key in keys:
+        if _id_prop_is_keyed(keyed_paths, bone_name, key):
+            if debug:
+                print(f"[DLM MigCustProps] skip keyed {debug_label}.{key!r}")
+            continue
         _copy_id_prop_recursive(orig_obj, rep_obj, key, debug_label, debug)
 
 
 def run_mig_cust_props(orig, rep):
-    """Custom properties: copy overridden settings (ID props only, incl. nested e.g. Settings/Devices) from orig to rep."""
+    """Copy unkeyed custom props (ID props only, incl. nested) from orig to rep.
+
+    Keyed channels (e.g. animated Rigify IK_FK) stay owned by the action — writing
+    them leaves orange dirt that fights fcurves under Scene time remapping.
+    """
     debug = True
     print(f"[DLM MigCustProps] orig={orig.name!r} rep={rep.name!r}")
+    keyed_paths = _keyed_id_prop_paths(orig, rep)
+    if keyed_paths:
+        print(f"[DLM MigCustProps] keyed id-prop paths ({len(keyed_paths)}): {sorted(keyed_paths)[:12]}")
     o_keys = list(orig.keys())
     print(f"[DLM MigCustProps] object orig keys (all): {o_keys}")
-    _copy_custom_props_from(orig, rep, f"obj:{orig.name}", debug)
-    # Bones with any id props (armatures only)
-    if orig.type == "ARMATURE" and getattr(orig, "pose", None) and getattr(rep, "pose", None):
-        bones_with_keys = [(pb.name, list(pb.keys())) for pb in orig.pose.bones if pb.keys()]
-        print(f"[DLM MigCustProps] bones with id_props: {bones_with_keys}")
-        for pbone in orig.pose.bones:
-            if pbone.name not in rep.pose.bones:
-                continue
-            rbone = rep.pose.bones[pbone.name]
-            _copy_custom_props_from(pbone, rbone, f"bone:{pbone.name}", debug)
-        print(f"[DLM MigCustProps] rep object keys after: {list(rep.keys())}")
-        if "Settings" in rep.pose.bones:
-            sb = rep.pose.bones["Settings"]
-            print(f"[DLM MigCustProps] rep bone Settings keys after: {list(sb.keys())}")
-            if sb.keys():
-                for k in sb.keys():
-                    v = sb[k]
-                    if _is_id_prop_group(v):
-                        print(f"[DLM MigCustProps]   Settings[{k!r}] (group) keys: {list(v.keys())}")
-                    else:
-                        print(f"[DLM MigCustProps]   Settings[{k!r}] = {v!r}")
-    else:
-        print(f"[DLM MigCustProps] rep object keys after: {list(rep.keys())}")
+    scene = bpy.context.scene
+    with _time_remap_identity(scene) as disabled:
+        if disabled:
+            try:
+                scene.frame_set(int(scene.frame_current))
+            except Exception:
+                pass
+        _copy_custom_props_from(
+            orig, rep, f"obj:{orig.name}", debug, keyed_paths=keyed_paths, bone_name=None
+        )
+        # Bones with any id props (armatures only)
+        if orig.type == "ARMATURE" and getattr(orig, "pose", None) and getattr(rep, "pose", None):
+            bones_with_keys = [(pb.name, list(pb.keys())) for pb in orig.pose.bones if pb.keys()]
+            print(f"[DLM MigCustProps] bones with id_props: {bones_with_keys}")
+            for pbone in orig.pose.bones:
+                if pbone.name not in rep.pose.bones:
+                    continue
+                rbone = rep.pose.bones[pbone.name]
+                _copy_custom_props_from(
+                    pbone,
+                    rbone,
+                    f"bone:{pbone.name}",
+                    debug,
+                    keyed_paths=keyed_paths,
+                    bone_name=pbone.name,
+                )
+            print(f"[DLM MigCustProps] rep object keys after: {list(rep.keys())}")
+            if "Settings" in rep.pose.bones:
+                sb = rep.pose.bones["Settings"]
+                print(f"[DLM MigCustProps] rep bone Settings keys after: {list(sb.keys())}")
+                if sb.keys():
+                    for k in sb.keys():
+                        v = sb[k]
+                        if _is_id_prop_group(v):
+                            print(f"[DLM MigCustProps]   Settings[{k!r}] (group) keys: {list(v.keys())}")
+                        else:
+                            print(f"[DLM MigCustProps]   Settings[{k!r}] = {v!r}")
+        else:
+            print(f"[DLM MigCustProps] rep object keys after: {list(rep.keys())}")
 
 
 def _retarget_id(ob, orig, rep, orig_to_rep):
@@ -1339,8 +1448,8 @@ def run_retarg_relatives(orig, rep, rep_descendants, orig_to_rep, *, retain_scal
                             except Exception:
                                 pass
 
-    # Sync RNA to animsys (honest vs scrub). Do not paint scene-frame keys over remap.
-    sync_animsys_to_rna(rep)
+    # Sync RNA at key times (temp 1:1); restores user's Time Stretching Map.
+    sync_animsys_to_rna(rep, pair=orig)
     for ob in reparented_objs:
         refresh_object_after_relation_edit(ob)
         sync_animsys_to_rna(ob)
