@@ -489,18 +489,22 @@ def _copy_action_slot(src_owner, dst_owner, dst_action, log_prefix="[DLM MigNLA]
 
 
 def _collect_orig_actions(orig):
-    """Active action + all NLA strip actions on orig (unique, ordered)."""
+    """Actions that drive orig: active action, plus NLA strip actions when strip eval is on."""
     actions = []
     seen = set()
     ad = getattr(orig, "animation_data", None)
     if not ad:
         return actions
-    for action in [getattr(ad, "action", None)] + [
-        strip.action
-        for track in (ad.nla_tracks or [])
-        for strip in track.strips
-        if getattr(strip, "action", None)
-    ]:
+    candidates = [getattr(ad, "action", None)]
+    # use_nla off → strips are dormant; only the slotted/active action evaluates.
+    if bool(getattr(ad, "use_nla", True)):
+        candidates.extend(
+            strip.action
+            for track in (ad.nla_tracks or [])
+            for strip in track.strips
+            if getattr(strip, "action", None)
+        )
+    for action in candidates:
         if action is None or id(action) in seen:
             continue
         seen.add(id(action))
@@ -704,7 +708,12 @@ def _retain_transforms_from_context(context):
 def run_mig_nla(
     orig, rep, report=None, context=None, *, retain_scale=None, retain_transforms=None
 ):
-    """Migrate NLA: copy tracks and strips to replacement; or mirror action slot when no NLA (MigNLA).
+    """Migrate NLA tracks/strips, or the active slotted action when NLA is unused (MigNLA).
+
+    When orig has NLA strips but strip evaluation is off (``use_nla=False``), strips
+    are ignored and only the active/slotted action is duplicated onto rep — matching
+    what Blender actually plays.
+
     Actions are duplicated so repchar has independent copies.
     Copies unkeyed pose. Object transforms skipped when *retain_transforms*;
     else loc/rot always and scale unless *retain_scale*.
@@ -731,8 +740,20 @@ def run_mig_nla(
             )
         return
     ad = orig.animation_data
-    has_nla = ad.nla_tracks and len(ad.nla_tracks) > 0
     active_action = getattr(ad, "action", None)
+    use_nla = bool(getattr(ad, "use_nla", True))
+    has_nla_tracks = bool(ad.nla_tracks and len(ad.nla_tracks) > 0)
+    # Dormant strips (Push Down leftovers, etc.): do not migrate or clear the action.
+    has_nla = has_nla_tracks and use_nla
+    if has_nla_tracks and not use_nla:
+        print(
+            "[DLM MigNLA] use_nla off — ignoring NLA strips; "
+            + (
+                f"migrating active action {active_action.name!r} only"
+                if active_action
+                else "no active action"
+            )
+        )
     if not has_nla:
         if rep.animation_data is None:
             rep.animation_data_create()
@@ -767,6 +788,9 @@ def run_mig_nla(
         rad.action = dup_action
         # Bind the duplicated action's own matching slot (not orig's slot pointer).
         _copy_action_slot(ad, rad, dup_action)
+        if hasattr(ad, "use_nla") and hasattr(rad, "use_nla"):
+            rad.use_nla = use_nla
+            print(f"[DLM MigNLA] set rep use_nla={use_nla}")
         for prop in ("action_blend_type", "action_extrapolation", "action_influence"):
             if hasattr(ad, prop) and hasattr(rad, prop):
                 setattr(rad, prop, getattr(ad, prop))
@@ -777,7 +801,13 @@ def run_mig_nla(
             _activate_topmost_als(context, orig, rep)
         obj_n, bone_n = _unkeyed()
         if report:
-            if active_action:
+            if active_action and has_nla_tracks and not use_nla:
+                report(
+                    {"INFO"},
+                    f"use_nla off — action+slot only (NLA skipped); "
+                    f"unkeyed obj={obj_n} bones={bone_n}.",
+                )
+            elif active_action:
                 report(
                     {"INFO"},
                     f"No NLA; action+slot copied; unkeyed obj={obj_n} bones={bone_n}.",
