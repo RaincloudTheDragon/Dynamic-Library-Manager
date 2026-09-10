@@ -609,7 +609,7 @@ class DLM_OT_picker_original_character(Operator):
     bl_idname = "dlm.picker_original_character"
     bl_label = "Pick Original"
     bl_description = "Set the original character armature from the active object"
-    bl_options = {"REGISTER"}
+    bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         obj = context.active_object
@@ -625,7 +625,7 @@ class DLM_OT_picker_replacement_character(Operator):
     bl_idname = "dlm.picker_replacement_character"
     bl_label = "Pick Replacement"
     bl_description = "Set the replacement character armature from the active object"
-    bl_options = {"REGISTER"}
+    bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         obj = context.active_object
@@ -659,7 +659,7 @@ class DLM_OT_picker_original_prop(Operator):
     bl_idname = "dlm.picker_original_prop"
     bl_label = "Pick Original Prop"
     bl_description = "Set the original prop from the active object (any type)"
-    bl_options = {"REGISTER"}
+    bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         obj = context.active_object
@@ -675,7 +675,7 @@ class DLM_OT_picker_replacement_prop(Operator):
     bl_idname = "dlm.picker_replacement_prop"
     bl_label = "Pick Replacement Prop"
     bl_description = "Set the replacement prop from the active object (any type)"
-    bl_options = {"REGISTER"}
+    bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
         obj = context.active_object
