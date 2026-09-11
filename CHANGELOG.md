@@ -1,3 +1,16 @@
+## [v0.6.0] - 2026-09-11
+
+### Features
+
+- Missing Library Propagation: optional non-armature libs; companion stubs for nested link chains (e.g. prop → materials).
+- PropMig: Object/Collection targets, retain scale/transforms, collection-aware Remove Original.
+
+### Fixes
+
+- MigNLA: skip dormant NLA when `use_nla` is off; slotted pose fcurves; keyed custom props + Time Stretching warning.
+- RetargRelatives: sample actions at 1:1 time remap; avoid transform dirt.
+- UI: undo Orig/Rep eyedropper picks.
+
 ## [v0.5.3] - 2026-09-09
 
 ### Features
