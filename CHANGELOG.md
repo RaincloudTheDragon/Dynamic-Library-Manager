@@ -1,3 +1,9 @@
+## [v0.6.1] - 2026-09-18
+
+### Fixes
+
+- RetargRelatives: refresh Child Of inverse on target swap (`inv_new = T_new.inv @ T_old @ inv_old`) so scaled props keep world contribution.
+
 ## [v0.6.0] - 2026-09-11
 
 ### Features
