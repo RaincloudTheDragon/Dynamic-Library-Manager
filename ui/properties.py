@@ -135,11 +135,11 @@ class DynamicLibraryManagerProperties(PropertyGroup):
     retarg_retain_scale: BoolProperty(
         name="Retain scale",
         description=(
-            "On: keep the replacement object's scale (CopyAttr skips copying "
-            "scale; RetargRelatives does not normalize rep to unit). "
-            "Off (default/normal): CopyAttr copies scale from original; "
-            "RetargRelatives normalizes scaled parents so grabber/prop children "
-            "stay correct after scale cleanup"
+            "On: keep replacement object scale (CopyAttr skips scale; RetargRelatives "
+            "keeps matching parent scales — for scaled armatures / same scale semantics). "
+            "Off (default): unit-scale the rep parent when orig was scene-scaled so "
+            "applied-size prop meshes stay correct. Child Of inverses are rebuilt on "
+            "retarget either way"
         ),
         default=False,
     )

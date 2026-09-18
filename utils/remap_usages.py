@@ -752,17 +752,70 @@ def build_override_collection_object_map(orig, rep, scene=None):
     return mapping
 
 
-def _remap_constraint(c, mapping):
+def _constraint_target_matrix(target, subtarget=""):
+    """Evaluated target matrix for Child Of (object, or pose bone when *subtarget*)."""
+    if target is None:
+        return None
+    if subtarget and getattr(target, "type", None) == "ARMATURE" and target.pose:
+        pb = target.pose.bones.get(subtarget)
+        if pb is not None:
+            return target.matrix_world @ pb.matrix
+    return target.matrix_world.copy()
+
+
+def _childof_retarget_inverse(c, old_target, new_target):
+    """
+    Keep Child Of's world contribution when swapping targets.
+
+    Blender Set Inverse is ``inv = target.inverted()`` (not ``T.inv @ owner``).
+    Contribution at a frame is ``T @ inv``. Preserve it across retarget:
+
+        T_new @ inv_new = T_old @ inv_old
+        inv_new = T_new.inv @ T_old @ inv_old
+
+    Using ``T.inv @ owner.matrix_world`` double-applies the owner and shifts it.
+    """
+    if c is None or old_target is None or new_target is None:
+        return False
+    sub = getattr(c, "subtarget", "") or ""
+    old_t = _constraint_target_matrix(old_target, sub)
+    new_t = _constraint_target_matrix(new_target, sub)
+    if old_t is None or new_t is None:
+        return False
+    try:
+        old_inv = c.inverse_matrix.copy()
+        c.inverse_matrix = new_t.inverted() @ old_t @ old_inv
+    except Exception:
+        return False
+    return True
+
+
+def _remap_constraint(c, mapping, owner=None, owner_bone=None):
     """Remap constraint target and ArmatureConstraint.targets. Return True if anything changed."""
     changed = False
     tgt = getattr(c, "target", None)
     new = _mapped(tgt, mapping)
     if new is not tgt:
+        old_tgt = tgt
         try:
             c.target = new
             changed = True
         except Exception:
             pass
+        # Child Of inverse is baked to the old target; preserve T@inv across swap.
+        if (
+            changed
+            and c.type == "CHILD_OF"
+            and old_tgt is not None
+            and new is not None
+            and _childof_retarget_inverse(c, old_tgt, new)
+        ):
+            print(
+                f"[DLM remap] retargeted Child Of inverse on "
+                f"{getattr(owner, 'name', '?')!r}/"
+                f"{getattr(owner_bone, 'name', '') or 'OBJECT'} "
+                f"constraint {c.name!r}: {old_tgt.name!r} -> {new.name!r}"
+            )
     targets = getattr(c, "targets", None)
     if targets is None:
         return changed
@@ -1626,13 +1679,13 @@ def remap_object_usages(
             )
         if ob not in skip_own:
             for c in getattr(ob, "constraints", []):
-                if _remap_constraint(c, mapping):
+                if _remap_constraint(c, mapping, owner=ob):
                     counts["constraints"] += 1
         if ob.type == "ARMATURE" and ob.pose and ob not in skip_bones:
             t_bones = time.perf_counter()
             for pbone in ob.pose.bones:
                 for c in pbone.constraints:
-                    if _remap_constraint(c, mapping):
+                    if _remap_constraint(c, mapping, owner=ob, owner_bone=pbone):
                         counts["bone_constraints"] += 1
             _remap_dbg(
                 f"  armature {ob.name!r} bone walk {time.perf_counter() - t_bones:.3f}s "
