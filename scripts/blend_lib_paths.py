@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from typing import Iterable
 
 
@@ -131,13 +132,18 @@ def find_basename_in_roots(
     for path in prefer or ():
         if path and os.path.isfile(path) and os.path.basename(path).lower() == want:
             return os.path.normpath(path)
-    for root in roots:
-        root = (root or "").strip()
-        if not root or not os.path.isdir(root):
-            continue
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-            for name in filenames:
-                if name.lower() == want:
-                    return os.path.normpath(os.path.join(dirpath, name))
+
+    root_list = [r for r in roots if (r or "").strip()]
+    try:
+        from search_index import get_blend_paths
+    except ImportError:
+        scripts_dir = os.path.dirname(os.path.abspath(__file__))
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from search_index import get_blend_paths
+
+    blends, _ = get_blend_paths(root_list)
+    for full in blends:
+        if os.path.basename(full).lower() == want and os.path.isfile(full):
+            return os.path.normpath(full)
     return ""

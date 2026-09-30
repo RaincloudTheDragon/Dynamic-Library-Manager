@@ -233,27 +233,37 @@ def _filename_matches_related(filename: str, related_lowers: set[str]) -> bool:
 
 
 def find_basenames(roots: list[str], basenames: set[str]) -> dict[str, list[str]]:
-    """Walk roots for matching .blend names; skip directory names starting with '.'."""
+    """Match basenames against the session .blend index (walk once, reuse).
+
+    Skips directory names starting with '.'. Uses ``search_index`` so repeat
+    Search with the same roots skips a full NAS walk.
+    """
     related_by_want: dict[str, set[str]] = {}
     for b in basenames:
         if not b:
             continue
         related_by_want[b] = {r.lower() for r in related_basenames(b)}
     hits: dict[str, list[str]] = {b: [] for b in basenames}
-    for root in roots:
-        if not root or not os.path.isdir(root):
-            continue
-        for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-            for name in filenames:
-                if not name.lower().endswith(".blend"):
-                    continue
-                full = os.path.normpath(os.path.join(dirpath, name))
-                for want, related in related_by_want.items():
-                    if not _filename_matches_related(name, related):
-                        continue
-                    if full not in hits[want]:
-                        hits[want].append(full)
+    if not related_by_want:
+        return hits
+
+    try:
+        from search_index import get_blend_paths
+    except ImportError:
+        # Script dir may already be on path; fall back to relative package-less import.
+        scripts_dir = os.path.dirname(os.path.abspath(__file__))
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from search_index import get_blend_paths
+
+    blends, _from_cache = get_blend_paths(list(roots))
+    for full in blends:
+        name = os.path.basename(full)
+        for want, related in related_by_want.items():
+            if not _filename_matches_related(name, related):
+                continue
+            if full not in hits[want]:
+                hits[want].append(full)
     return hits
 
 
@@ -602,6 +612,8 @@ class SymlinkPropagationApp(tk.Tk):
         self.b_rem_root.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
         b_search = ttk.Button(btns, text="Search", command=self._run_search)
         b_search.pack(fill=tk.X, pady=2)
+        self.b_clear_index = ttk.Button(btns, text="Clear Search Index", command=self._clear_search_index)
+        self.b_clear_index.pack(fill=tk.X)
         WidgetHoverTip(
             self.b_add_root,
             "Add a folder to search for modern .blend files by exact basename.",
@@ -612,7 +624,13 @@ class SymlinkPropagationApp(tk.Tk):
         )
         WidgetHoverTip(
             b_search,
-            "Walk search roots for exact basename matches. Skips folder names starting with '.'.",
+            "Match missing libs against the session .blend index under search roots "
+            "(builds the index on first Search; later Searches with the same roots reuse it).",
+        )
+        WidgetHoverTip(
+            self.b_clear_index,
+            "Drop the session .blend path index (memory + temp file). "
+            "Next Search walks the NAS again — use after files were added/moved under the roots.",
         )
         self._update_root_buttons()
 
@@ -763,6 +781,8 @@ class SymlinkPropagationApp(tk.Tk):
         )
 
         self._refresh_tree()
+        # status_var exists now — annotate if a prior Search left a session index.
+        self._update_index_status_hint()
 
     @staticmethod
     def _format_maps(maps: dict[str, str]) -> str:
@@ -976,6 +996,41 @@ class SymlinkPropagationApp(tk.Tk):
         if getattr(self, "b_rem_root", None) is not None:
             self.b_rem_root.configure(state=state)
 
+    def _update_index_status_hint(self) -> None:
+        """Show index size in the status line when idle."""
+        if not getattr(self, "status_var", None):
+            return
+        try:
+            from search_index import index_stats
+        except ImportError:
+            return
+        st = index_stats()
+        if not st.get("has_index"):
+            return
+        cur = (self.status_var.get() or "").strip()
+        if not cur or "missing librar" in cur.lower() or "Search index:" in cur:
+            self.status_var.set(
+                f"Search index: {st['blends']} .blend under {st['roots']} root(s). "
+                "Search reuses this until roots change or Clear Search Index."
+            )
+
+    def _clear_search_index(self) -> None:
+        try:
+            from search_index import clear_index
+        except ImportError:
+            self._mb_error("Clear Search Index", "search_index module missing.")
+            return
+        clear_index()
+        self.status_var.set("Search index cleared — next Search will walk the roots.")
+
+    def _invalidate_search_index(self) -> None:
+        """Roots changed — drop index so the next Search matches the new set."""
+        try:
+            from search_index import clear_index
+        except ImportError:
+            return
+        clear_index()
+
     def _add_root(self) -> None:
         path = self._ask_directory("Add search root")
         if not path:
@@ -986,12 +1041,14 @@ class SymlinkPropagationApp(tk.Tk):
             self.search_roots[0] = path
             self.roots_list.delete(0)
             self.roots_list.insert(0, path)
+            self._invalidate_search_index()
             self._persist_roots()
             self._update_root_buttons()
             return
         if path not in self.search_roots:
             self.search_roots.append(path)
             self.roots_list.insert(tk.END, path)
+            self._invalidate_search_index()
             self._persist_roots()
             self._update_root_buttons()
 
@@ -1007,6 +1064,7 @@ class SymlinkPropagationApp(tk.Tk):
         if not self.search_roots:
             self.search_roots = [""]
             self.roots_list.insert(tk.END, "")
+        self._invalidate_search_index()
         self._persist_roots()
         self._update_root_buttons()
 
@@ -1031,12 +1089,41 @@ class SymlinkPropagationApp(tk.Tk):
         self.update_idletasks()
 
         def work() -> None:
+            from_cache = False
+            try:
+                from search_index import cached_blends_for_roots
+
+                from_cache = cached_blends_for_roots(ok_roots) is not None
+            except ImportError:
+                pass
             hits = find_basenames(ok_roots, basenames)
-            self.after(0, lambda: self._apply_search_hits(hits, skipped=missing_roots))
+            n_blends = 0
+            try:
+                from search_index import index_stats
+
+                n_blends = int(index_stats().get("blends") or 0)
+            except ImportError:
+                pass
+            self.after(
+                0,
+                lambda: self._apply_search_hits(
+                    hits,
+                    skipped=missing_roots,
+                    from_cache=from_cache,
+                    indexed_blends=n_blends,
+                ),
+            )
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _apply_search_hits(self, hits: dict[str, list[str]], skipped: list[str] | None = None) -> None:
+    def _apply_search_hits(
+        self,
+        hits: dict[str, list[str]],
+        skipped: list[str] | None = None,
+        *,
+        from_cache: bool = False,
+        indexed_blends: int = 0,
+    ) -> None:
         multi_defaulted = 0
         for row in self.rows:
             want = row["basename"]
@@ -1051,7 +1138,16 @@ class SymlinkPropagationApp(tk.Tk):
                     multi_defaulted += 1
         self._refresh_tree()
         filled = sum(1 for r in self.rows if r.get("modern_path"))
-        msg = f"Search done — {filled}/{len(self.rows)} modern paths set."
+        if from_cache:
+            msg = (
+                f"Matched from session index ({indexed_blends} .blend) — "
+                f"{filled}/{len(self.rows)} modern paths set."
+            )
+        else:
+            msg = (
+                f"Search done — indexed {indexed_blends} .blend; "
+                f"{filled}/{len(self.rows)} modern paths set."
+            )
         if multi_defaulted:
             msg += (
                 f" {multi_defaulted} have multiple hits "
