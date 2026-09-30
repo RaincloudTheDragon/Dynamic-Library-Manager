@@ -887,7 +887,7 @@ class SymlinkPropagationApp(tk.Tk):
 
         if col == "modern":
             return (
-                "Target .blend to rempath to after stubs load. "
+                "Target .blend to relocate to after stubs load. "
                 "Search auto-fills only when a single exact (or single related) hit exists; "
                 "multiple hits (including date-stamped filenames) need Pick hit "
                 "(or double-click the row)."
@@ -1316,7 +1316,7 @@ class SymlinkPropagationApp(tk.Tk):
             if n <= 0:
                 if not self._mb_yesno(
                     "Confirm",
-                    "Blender has not reported a successful rempath yet "
+                    "Blender has not reported a successful relocate yet "
                     "(remapped_count=0).\n\n"
                     "Teardown now will remove stubs while libraries may still "
                     "point at archaic paths.\n\nProceed anyway?",

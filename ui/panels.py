@@ -26,7 +26,7 @@ class DLM_PT_main_panel(Panel):
         row.operator("dlm.make_paths_relative", text="Make Paths Relative", icon="FILE_PARENT")
         row.operator("dlm.make_paths_absolute", text="Make Paths Absolute", icon="FILE_FOLDER")
         row = layout.row()
-        # When stubs are ready: Revert + Remap (no auto-save). Else launch wizard.
+        # When stubs are ready: Revert + Remap via lib_relocate (no auto-save). Else launch wizard.
         from ..utils import stub_handoff
 
         session = stub_handoff.load_session()

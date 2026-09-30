@@ -190,12 +190,12 @@ class DLM_OT_symlink_revert(Operator):
 
 
 class DLM_OT_symlink_remap(Operator):
-    """Rewrite archaic library paths → modern. Does not save. Gated until stubs load cleanly."""
+    """Relocate archaic library paths → modern via wm.lib_relocate. Does not save."""
 
     bl_idname = "dlm.symlink_remap"
     bl_label = "Remap"
     bl_description = (
-        "Rempath archaic → modern in memory only (no save). "
+        "Relocate archaic → modern with wm.lib_relocate (reload + remap; no save). "
         "Disabled only when in-scope (wizard) stubs/libs are missing or invalid — "
         "other missing links are ignored. Fix stubs and Revert first; save manually when ready"
     )
@@ -203,7 +203,7 @@ class DLM_OT_symlink_remap(Operator):
 
     make_relative: BoolProperty(
         name="Make Relative",
-        description="Write blend-relative // paths when remapping",
+        description="Write blend-relative // paths when relocating",
         default=True,
     )
 
@@ -241,25 +241,47 @@ class DLM_OT_symlink_remap(Operator):
         stats = path_normalize.apply_modern_paths(plan, make_relative=bool(self.make_relative))
         n = int(stats.get("libraries") or 0)
         already = int(stats.get("already_modern") or 0)
-        if n <= 0 and already <= 0:
-            self.report(
-                {"ERROR"},
-                "Remapped 0 libraries — archaic paths did not match. Check wizard pairs / Revert.",
-            )
+        skipped_parent = int(stats.get("skipped_after_parent") or 0)
+        failed = list(stats.get("failed") or [])
+        if n <= 0 and already <= 0 and skipped_parent <= 0:
+            err = "Relocated 0 libraries — archaic paths did not match. Check wizard pairs / Revert."
+            if failed:
+                err = f"Relocate failed for {len(failed)} librar(ies). Check modern paths / Revert."
+            self.report({"ERROR"}, err)
             return {"CANCELLED"}
 
-        if n > 0:
+        if n > 0 or skipped_parent > 0:
             stub_handoff.set_session_status(
                 stub_handoff.STATUS_APPLY_DONE,
                 remapped_count=n,
                 applied=stats.get("applied") or [],
-                message=f"remapped={n} (not saved)",
+                failed=failed,
+                skipped_after_parent=skipped_parent,
+                message=(
+                    f"relocated={n} skipped_after_parent={skipped_parent} "
+                    f"failed={len(failed)} (not saved)"
+                ),
             )
-            self.report(
-                {"INFO"},
-                f"Remapped {n} path(s) in memory — not saved. "
-                "Save manually when correct, then Teardown stubs in the wizard.",
+            skip_note = (
+                f"; skipped {skipped_parent} companion(s) already resolved"
+                if skipped_parent
+                else ""
             )
+            if failed:
+                preview = "; ".join(
+                    f"{f.get('id_name')}: {f.get('error')}" for f in failed[:3]
+                )
+                self.report(
+                    {"WARNING"},
+                    f"Relocated {n}{skip_note}; {len(failed)} failed ({preview}). "
+                    "Save when correct, then Teardown stubs in the wizard.",
+                )
+            else:
+                self.report(
+                    {"INFO"},
+                    f"Relocated {n} librar(ies){skip_note} — not saved. "
+                    "Save manually when correct, then Teardown stubs in the wizard.",
+                )
         else:
             stub_handoff.set_session_status(
                 stub_handoff.STATUS_APPLY_DONE,

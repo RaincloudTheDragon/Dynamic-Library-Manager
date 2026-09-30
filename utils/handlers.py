@@ -5,7 +5,7 @@
 
 """Blender app handlers for Missing Library Propagation (legacy pending_apply after load).
 
-New flow: Revert and Remap are separate operators; Remap does not save.
+New flow: Revert and Remap are separate operators; Remap uses wm.lib_relocate and does not save.
 """
 
 from __future__ import annotations

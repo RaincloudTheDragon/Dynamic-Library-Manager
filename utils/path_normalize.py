@@ -136,21 +136,61 @@ def collect_missing_libraries() -> list[dict[str, Any]]:
     return out
 
 
+def _companion_already_resolved(lib, pair: dict[str, Any]) -> bool:
+    """
+    True if a companion Library no longer needs relocate after a parent remap.
+
+    Either already on the plan modern path, or loaded from some other real file
+    that is not the archaic stub (nested relatives next to a relocated parent).
+    """
+    if library_filepath_is_modern(lib, pair):
+        return True
+    raw = getattr(lib, "filepath", "") or ""
+    if not raw:
+        return False
+    resolved = abs_blend_path(raw)
+    if not resolved or not os.path.isfile(resolved):
+        return False
+    archaic = norm_path(pair.get("archaic_path") or "").replace("/", "\\").upper()
+    if archaic and norm_path(resolved).replace("/", "\\").upper() == archaic:
+        return False
+    stored = norm_path(pair.get("stored_path") or "").replace("/", "\\").upper()
+    raw_u = norm_path(raw).replace("/", "\\").upper()
+    if stored and raw_u == stored:
+        return False
+    return True
+
+
 def apply_modern_paths(plan: list[dict[str, Any]], *, make_relative: bool = True) -> dict[str, Any]:
     """
-    Rewrite library filepaths from archaic → modern (string only, no reload).
+    Relocate libraries archaic → modern via ``bpy.ops.wm.lib_relocate`` (reload + remap).
 
     Matches by absolute archaic path, stored path, then basename / id_name.
-    Writes blend-relative // paths when possible.
+    Uses the operator's ``relative_path`` flag for blend-relative // paths.
+
+    Primaries (non-companion) relocate first. After each relocate, remaining
+    work is re-checked — companions already pointing at modern (e.g. nested
+    paths remapped with the parent) skip a second NAS reload.
 
     Important: do **not** skip merely because abspath(raw) resolves through a
     stub symlink to the modern file — the stored filepath string can still be
     archaic, and skipping leaves session stuck on stubs_ready (Remap loops).
     Does not save the blend — caller / user decides when to write.
+    Never assigns ``Library.filepath`` directly (unsupported; see Blender #163709).
     """
-    stats = {"libraries": 0, "skipped_missing_modern": 0, "already_modern": 0, "applied": []}
+    stats = {
+        "libraries": 0,
+        "skipped_missing_modern": 0,
+        "already_modern": 0,
+        "skipped_after_parent": 0,
+        "applied": [],
+        "failed": [],
+    }
 
-    for lib in bpy.data.libraries:
+    # Snapshot before relocate — wm.lib_relocate mutates bpy.data.libraries.
+    # companion flag drives primary-first order.
+    work: list[dict[str, Any]] = []
+    for lib in list(bpy.data.libraries):
         raw = getattr(lib, "filepath", "") or ""
         if not raw:
             continue
@@ -161,35 +201,129 @@ def apply_modern_paths(plan: list[dict[str, Any]], *, make_relative: bool = True
         modern = pair.get("modern_path") or ""
         if not modern:
             continue
-        if not os.path.isfile(modern):
+        modern_abs = norm_path(modern)
+        if not os.path.isfile(modern_abs):
             stats["skipped_missing_modern"] += 1
             continue
 
-        raw_norm = norm_path(raw)
-        new_fp = to_blend_relative(modern) if make_relative else norm_path(modern)
-        raw_u = raw_norm.replace("/", "\\").upper()
-        new_u = norm_path(new_fp).replace("/", "\\").upper()
-        modern_u = norm_path(modern).replace("/", "\\").upper()
         # Skip only when the *stored* string is already the modern target.
-        # abspath may follow stubs to modern while raw is still the archaic UNC.
-        if raw_u == new_u or raw_u == modern_u:
+        if library_filepath_is_modern(lib, pair):
             stats["already_modern"] += 1
             continue
 
-        try:
-            lib.filepath = new_fp
-        except Exception:
+        work.append(
+            {
+                "lib_name": lib.name,
+                "raw": raw,
+                "modern_abs": modern_abs,
+                "companion": bool(pair.get("companion")),
+                "pair": pair,
+            }
+        )
+
+    # Primaries first so nested companions can resolve without a second relocate.
+    work.sort(key=lambda item: (1 if item["companion"] else 0, item["lib_name"]))
+
+    for item in work:
+        pair = item["pair"]
+        modern_abs = item["modern_abs"]
+        is_companion = bool(item["companion"])
+        # Re-resolve: parent relocate may rename/remap this Library datablock.
+        lib = bpy.data.libraries.get(item["lib_name"])
+        if lib is None:
+            lib = _library_still_needing_pair(pair, companion=is_companion)
+        if lib is None:
+            # Gone or already remapped away with a parent — no NAS hit needed.
+            if is_companion:
+                stats["skipped_after_parent"] += 1
+            else:
+                stats["already_modern"] += 1
             continue
+
+        raw = getattr(lib, "filepath", "") or item["raw"]
+        if library_filepath_is_modern(lib, pair):
+            if is_companion:
+                stats["skipped_after_parent"] += 1
+            else:
+                stats["already_modern"] += 1
+            continue
+        if is_companion and _companion_already_resolved(lib, pair):
+            stats["skipped_after_parent"] += 1
+            continue
+
+        # Stored path still archaic — must relocate this ID.
+        lib_name = lib.name
+        directory = os.path.dirname(modern_abs) + os.sep
+        filename = os.path.basename(modern_abs)
+        try:
+            result = bpy.ops.wm.lib_relocate(
+                library=lib_name,
+                filepath=modern_abs,
+                directory=directory,
+                filename=filename,
+                relative_path=bool(make_relative),
+            )
+        except Exception as e:
+            stats["failed"].append({"id_name": lib_name, "from": raw, "error": str(e)})
+            continue
+
+        # Operator returns a set like {'FINISHED'} or {'CANCELLED'}.
+        if not (isinstance(result, (set, frozenset)) and "FINISHED" in result):
+            stats["failed"].append(
+                {
+                    "id_name": lib_name,
+                    "from": raw,
+                    "error": f"lib_relocate returned {result!r}",
+                }
+            )
+            continue
+
+        to_fp = _filepath_after_relocate(lib_name, modern_abs)
         stats["libraries"] += 1
         stats["applied"].append(
             {
-                "id_name": lib.name,
+                "id_name": lib_name,
                 "from": raw,
-                "to": new_fp,
-                "modern_abs": norm_path(modern),
+                "to": to_fp or modern_abs,
+                "modern_abs": modern_abs,
+                "companion": is_companion,
             }
         )
     return stats
+
+
+def _library_still_needing_pair(pair: dict[str, Any], *, companion: bool = False):
+    """Return a Library that still matches *pair* and still needs relocate, or None."""
+    for lib in bpy.data.libraries:
+        raw = getattr(lib, "filepath", "") or ""
+        if not raw:
+            continue
+        matched = find_plan_pair_for_library(lib, [pair])
+        if matched is None:
+            continue
+        if library_filepath_is_modern(lib, pair):
+            continue
+        if companion and _companion_already_resolved(lib, pair):
+            continue
+        return lib
+    return None
+
+
+def _filepath_after_relocate(lib_name: str, modern_abs: str) -> str:
+    """Best-effort stored filepath after lib_relocate (name may change)."""
+    modern_u = modern_abs.replace("/", "\\").upper()
+    lib_after = bpy.data.libraries.get(lib_name)
+    if lib_after is not None:
+        return getattr(lib_after, "filepath", "") or ""
+    for cand in bpy.data.libraries:
+        raw_c = getattr(cand, "filepath", "") or ""
+        if not raw_c:
+            continue
+        if norm_path(raw_c).replace("/", "\\").upper() == modern_u:
+            return raw_c
+        if abs_blend_path(raw_c).replace("/", "\\").upper() == modern_u:
+            return raw_c
+    return ""
 
 
 def validate_archaic_present(plan: list[dict[str, Any]]) -> tuple[bool, list[str]]:
@@ -369,10 +503,10 @@ def make_paths_relative() -> None:
 
 def save_mainfile_after_rempath() -> bool:
     """
-    Persist remapped library paths to disk.
+    Persist remapped library paths to disk (legacy helper).
 
-    Changing Library.filepath often does not set bpy.data.is_dirty, so a normal
-    Ctrl+S can no-op and the next open still has archaic relatives. Always write.
+    ``wm.lib_relocate`` usually dirties the blend; always write anyway so a
+    no-op Ctrl+S cannot leave archaic relatives on disk.
     """
     if not bpy.data.filepath:
         return False
@@ -404,7 +538,7 @@ def run_pending_symlink_apply() -> dict[str, Any]:
     Consume session pending_apply after File > Revert / load (legacy).
 
     Prefer explicit Remap after Revert — new flow does not set pending_apply.
-    Never auto-saves; Remap / this path only rewrite Library.filepath in memory.
+    Never auto-saves; Remap relocates via ``wm.lib_relocate`` (reload + remap).
     """
     from . import stub_handoff
 
