@@ -54,7 +54,7 @@ In most cases the library data has not been lost; the libraries are valid, they 
 
 1. Set **Default Search Roots** in addon preferences (folders of modern `.blend` files).
 2. Click **Missing Library Propagation**. In the external wizard you can search (or remove) default paths, or add new ones. Optionally enable **Propagate non-armature libraries**. When hits are found, click **Create stubs**. If a library has multiple hits, use **Pick Hit** to choose which result to use. Create stubs also walks each hit’s nested Library links and adds **companion stubs** for missing chain deps (e.g. Hard-Hat → materials palette) without overwriting existing files.
-3. When stubs are ready, **Revert**, verify hits, then **Remap** (Remap does not auto-save). I recommend not having Load UI enabled when reverting; it keeps the UI state where you have it so you're not required to open up the DLM tab on the n-panel again.
+3. When stubs are ready, **Revert**, verify hits, then **Remap** (Remap does not auto-save). DLM Revert reloads the file with Load UI off so your workspace and the DLM sidebar stay put.
 4. Return to the wizard and tear down stubs when you are done.
 
 There are many modes by which the stubs can be created, the default is a simple copy of all the binary hits. This is generally the safest mode over SMB. Auto / Linux SSH remain when you actually need symlinks to evaluate on Windows via a Linux-hosted SMB share. This is because Blender on Windows can't read blends from reparse points, even with the advanced Remote-to-Remote evaluation option enabled. Optional Windows `subst` covers phantom drive letters.

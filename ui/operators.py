@@ -137,12 +137,12 @@ class DLM_OT_symlink_propagation(Operator):
 
 
 class DLM_OT_symlink_revert(Operator):
-    """File > Revert so libraries reload through current stubs. Does not rempath or save."""
+    """Reload the blend through current stubs without swapping the UI layout."""
 
     bl_idname = "dlm.symlink_revert"
     bl_label = "Revert"
     bl_description = (
-        "Revert the blend so armature libs reload via stubs. "
+        "Reload the blend so armature libs load via stubs (keeps current UI; no Load UI). "
         "Does not Remap or save — swap bad stubs in the wizard and Revert again if needed"
     )
     bl_options = {"REGISTER"}
@@ -173,17 +173,24 @@ class DLM_OT_symlink_revert(Operator):
             pending_do_relative=False,
             message="reverted — verify stubs, then Remap",
         )
+        filepath = bpy.data.filepath
         try:
+            # wm.revert_mainfile has no load_ui in 5.x — open the same path with
+            # load_ui=False so the DLM panel / workspace stay put (#9).
             # use_scripts=True follows prefs / trusted paths. False forces the
             # "automatic execution disabled" security popup on every Revert
             # (e.g. Text 'Dennis_rig_ui.py').
-            bpy.ops.wm.revert_mainfile(use_scripts=True)
+            bpy.ops.wm.open_mainfile(
+                filepath=filepath,
+                load_ui=False,
+                use_scripts=True,
+            )
         except Exception as e:
             self.report({"ERROR"}, f"Revert failed: {e}")
             return {"CANCELLED"}
         self.report(
             {"INFO"},
-            "Reverted. Check libs/outliner; swap stubs in the wizard if hits are wrong, "
+            "Reverted (UI kept). Check libs/outliner; swap stubs in the wizard if hits are wrong, "
             "then Remap (Remap does not save).",
         )
         return {"FINISHED"}
