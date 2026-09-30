@@ -735,8 +735,8 @@ class SymlinkPropagationApp(tk.Tk):
         )
         WidgetHoverTip(
             b_pick,
-            "Choose among multiple Search hits for the selected row "
-            "(or double-click the row).",
+            "Choose among Search hits for the selected row "
+            "(first hit pre-selected; arrows + Enter). Double-click the row also opens this.",
         )
         WidgetHoverTip(b_clear, "Clear the modern path on the selected row.")
 
@@ -888,9 +888,8 @@ class SymlinkPropagationApp(tk.Tk):
         if col == "modern":
             return (
                 "Target .blend to relocate to after stubs load. "
-                "Search auto-fills only when a single exact (or single related) hit exists; "
-                "multiple hits (including date-stamped filenames) need Pick hit "
-                "(or double-click the row)."
+                "Search fills the top-ranked hit; when several exist the status "
+                "shows N hits — review with Pick hit… or double-click the row."
             )
 
         if col == "basename":
@@ -898,9 +897,9 @@ class SymlinkPropagationApp(tk.Tk):
 
         if col == "status":
             return (
-                "ok = modern file exists on disk; "
-                "N hits — pick = Search found multiple candidates "
-                "(Pick hit… or double-click the row)."
+                "ok = modern file exists; "
+                "ok · N hits = auto-picked first of several (review via Pick hit); "
+                "N hits — pick = Search found candidates but no modern path yet."
             )
 
         return ""
@@ -947,7 +946,9 @@ class SymlinkPropagationApp(tk.Tk):
             n = len(row.get("candidates") or [])
             status = ""
             if modern:
-                status = "ok" if os.path.isfile(modern) else "missing"
+                base = "ok" if os.path.isfile(modern) else "missing"
+                # Keep multi-hit visible so the defaulted first pick can be reviewed.
+                status = f"{base} · {n} hits" if n > 1 else base
             elif n > 1:
                 status = f"{n} hits — pick"
             elif n == 1:
@@ -1036,28 +1037,26 @@ class SymlinkPropagationApp(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def _apply_search_hits(self, hits: dict[str, list[str]], skipped: list[str] | None = None) -> None:
-        need_pick = 0
+        multi_defaulted = 0
         for row in self.rows:
             want = row["basename"]
             cands = rank_modern_hits(hits.get(want, []), want_basename=want)
             row["candidates"] = cands
             if not row.get("modern_path"):
-                exact = [c for c in cands if os.path.basename(c).lower() == want.lower()]
-                if len(exact) == 1:
-                    row["modern_path"] = exact[0]
-                elif len(exact) > 1:
-                    # Ambiguous (e.g. same basename under date-stamped folders) — require Pick hit.
-                    need_pick += 1
-                elif len(cands) == 1:
-                    row["modern_path"] = cands[0]
-                elif len(cands) > 1:
-                    # Multiple related-only hits — require Pick hit.
-                    need_pick += 1
+                if not cands:
+                    continue
+                # Always take the top-ranked hit; multi-hit rows stay reviewable via Pick hit.
+                row["modern_path"] = cands[0]
+                if len(cands) > 1:
+                    multi_defaulted += 1
         self._refresh_tree()
         filled = sum(1 for r in self.rows if r.get("modern_path"))
         msg = f"Search done — {filled}/{len(self.rows)} modern paths set."
-        if need_pick:
-            msg += f" {need_pick} need Pick hit."
+        if multi_defaulted:
+            msg += (
+                f" {multi_defaulted} have multiple hits "
+                "(defaulted to first — review via Pick hit…)."
+            )
         if skipped:
             msg += f" ({len(skipped)} root(s) missing on disk)"
         self.status_var.set(msg)
@@ -1089,26 +1088,38 @@ class SymlinkPropagationApp(tk.Tk):
         win.withdraw()
         win.title("Choose modern path")
         win.transient(self)
-        lb = tk.Listbox(win, exportselection=False)
+        lb = tk.Listbox(win, exportselection=False, activestyle="dotbox")
         lb.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
         for c in cands:
             lb.insert(tk.END, c)
+        # First hit selected for Enter / arrow-key review (#10).
         lb.selection_set(0)
-        lb.focus_set()
+        lb.activate(0)
+        lb.see(0)
 
-        def ok(_event=None) -> None:
+        def ok(_event=None) -> str:
             sel = lb.curselection()
             if sel:
                 self.rows[idx]["modern_path"] = cands[sel[0]]
                 self._refresh_tree()
             win.destroy()
+            return "break"
+
+        def cancel(_event=None) -> str:
+            win.destroy()
+            return "break"
 
         lb.bind("<Double-Button-1>", ok)
         lb.bind("<Return>", ok)
+        lb.bind("<KP_Enter>", ok)
+        win.bind("<Return>", ok)
+        win.bind("<KP_Enter>", ok)
+        win.bind("<Escape>", cancel)
         ttk.Button(win, text="Use selected", command=ok).pack(pady=4)
         center_window(win, 640, 320)
         win.deiconify()
         win.grab_set()
+        lb.focus_force()
 
     def _on_tree_double_click(self, _event=None) -> None:
         """Open Pick hit when the row has multiple Search candidates."""
