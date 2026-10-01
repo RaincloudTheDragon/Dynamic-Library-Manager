@@ -1,3 +1,13 @@
+## [v0.7.0] - 2026-10-01
+
+### Features
+
+- Missing Library Propagation: Remap via `wm.lib_relocate` (no bare `Library.filepath`); session `.blend` search index; multi-hit Search defaults to top-ranked path (`ok · N hits`).
+
+### Fixes
+
+- MLP Revert: reload with Load UI off so the DLM panel stays put (#9).
+
 ## [v0.6.1] - 2026-09-18
 
 ### Fixes
