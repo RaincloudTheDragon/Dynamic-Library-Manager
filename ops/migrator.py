@@ -500,6 +500,84 @@ def _copy_action_slot(src_owner, dst_owner, dst_action, log_prefix="[DLM MigNLA]
         return False
 
 
+def _copy_nla_strip_fcurves(src_strip, dst_strip, data_paths=("influence",)):
+    """
+    Copy NLA strip property FCurves (animated influence / strip time) onto *dst_strip*.
+
+    ``NlaStrip.fcurves`` has no ``new``/``remove``; seed with ``keyframe_insert``, then
+    replace keyframe points (handles + interpolation).
+    """
+    if src_strip is None or dst_strip is None:
+        return 0
+    allow = {p for p in (data_paths or ()) if p}
+    if not allow:
+        return 0
+    copied = 0
+    for sfc in getattr(src_strip, "fcurves", None) or []:
+        path = getattr(sfc, "data_path", "") or ""
+        if path not in allow:
+            continue
+        pts = list(getattr(sfc, "keyframe_points", []) or [])
+        if not pts:
+            continue
+        # Influence / strip_time need their animated flags before keys stick.
+        if path == "influence":
+            try:
+                dst_strip.use_animated_influence = True
+            except Exception:
+                pass
+        elif path in ("strip_time", "time"):
+            try:
+                dst_strip.use_animated_time = True
+            except Exception:
+                pass
+        try:
+            setattr(dst_strip, path, pts[0].co.y)
+            dst_strip.keyframe_insert(path, frame=int(round(pts[0].co.x)))
+        except Exception as e:
+            print(f"[DLM MigNLA] strip fcurve seed {path!r} failed: {e}")
+            continue
+        dfc = None
+        find = getattr(dst_strip.fcurves, "find", None)
+        if callable(find):
+            dfc = find(path)
+        if dfc is None:
+            for cand in dst_strip.fcurves:
+                if cand.data_path == path and cand.array_index == sfc.array_index:
+                    dfc = cand
+                    break
+        if dfc is None:
+            print(f"[DLM MigNLA] strip fcurve missing after seed: {path!r}")
+            continue
+        try:
+            dfc.keyframe_points.clear()
+            for skp in pts:
+                dkp = dfc.keyframe_points.insert(skp.co.x, skp.co.y, options={"FAST"})
+                dkp.interpolation = skp.interpolation
+                dkp.easing = skp.easing
+                dkp.handle_left_type = skp.handle_left_type
+                dkp.handle_right_type = skp.handle_right_type
+                dkp.handle_left = skp.handle_left.copy()
+                dkp.handle_right = skp.handle_right.copy()
+                for attr in ("amplitude", "period", "back"):
+                    if hasattr(skp, attr) and hasattr(dkp, attr):
+                        try:
+                            setattr(dkp, attr, getattr(skp, attr))
+                        except Exception:
+                            pass
+            dfc.extrapolation = sfc.extrapolation
+            dfc.keyframe_points.sort()
+            try:
+                dfc.keyframe_points.handles_recalc()
+            except Exception:
+                pass
+            dfc.update()
+            copied += 1
+        except Exception as e:
+            print(f"[DLM MigNLA] strip fcurve copy {path!r} failed: {e}")
+    return copied
+
+
 def _collect_orig_actions(orig):
     """Actions that drive orig: active action, plus NLA strip actions when strip eval is on."""
     actions = []
@@ -917,6 +995,12 @@ def run_mig_nla(
             new_strip.use_animated_time = strip.use_animated_time
             new_strip.use_animated_time_cyclic = strip.use_animated_time_cyclic
             new_strip.use_sync_length = strip.use_sync_length
+            # Flags alone do not move keys — copy strip FCurves (influence / strip_time).
+            _copy_nla_strip_fcurves(
+                strip,
+                new_strip,
+                data_paths=("influence", "strip_time"),
+            )
             # Strip action_slot must point at a slot on the duplicated action.
             _copy_action_slot(strip, new_strip, dup_action)
         prev_track = new_track
