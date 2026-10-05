@@ -1,3 +1,9 @@
+## [v0.8.0] - 2026-10-05
+
+### Features
+
+- MigNLA: copy animated strip influence (and strip time) FCurves, not just the flags.
+
 ## [v0.7.0] - 2026-10-01
 
 ### Features
