@@ -1789,7 +1789,9 @@ def run_full_migration(context):
 
 def run_full_prop_migration(context):
     """Migrate a prop Object/Collection pair: CopyAttr (roots), MigNLA/MigCustProps/
-    MigObjConst (all matched), MigObjRelatives (roots), RetargRelatives (full map).
+    MigObjConst (all matched), MigObjRelatives (roots).
+
+    RetargRelatives is intentionally omitted so you can scrub before/after running it separately (#11).
     Returns (True, message) or (False, error)."""
     roots, mapping = get_prop_migration_context(context)
     if not roots or not mapping:
@@ -1807,17 +1809,19 @@ def run_full_prop_migration(context):
             run_mig_obj_const(o, r, mapping)
         for o, r in roots:
             run_mig_obj_relatives(o, r, mapping, scene=context.scene)
-        run_retarg_relatives(
-            primary_orig,
-            primary_rep,
-            descendants(primary_rep),
-            mapping,
-            retain_scale=retain_scale,
-        )
     except Exception as e:
         return False, str(e)
     n = len(mapping)
-    return True, f"Prop migrated {n} object pair(s) ({primary_orig.name} → {primary_rep.name})"
+    print(
+        "[DLM Migrate Prop] skipped RetargRelatives. Scrub the timeline, then run it separately "
+        "(offsets may need a frame to settle).",
+        flush=True,
+    )
+    return (
+        True,
+        f"Prop migrated {n} object pair(s) ({primary_orig.name} → {primary_rep.name}). "
+        "RetargRelatives skipped. Scrub the timeline, then run RetargRelatives separately.",
+    )
 
 
 def _unlink_or_remove_prop_object(ob, report=None):

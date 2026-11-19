@@ -90,7 +90,7 @@ There is no single “run everything” button for characters; steps are indepen
 
 ### Prop Migrator
 
-Same idea for a non-armature pair — replace old props with new versions, or swap one prop for an entirely different prop (cleanup likely required). **Migrate Prop** runs CopyAttr → MigNLA → MigCustProps → MigObjConst → MigObjRelatives → RetargRelatives. **Remove Original** is separate so you can verify the replacement before deleting. Constraints and parent hierarchies often need offsets set properly; scrub at least one frame so they snap into place.
+Same idea for a non-armature pair — replace old props with new versions, or swap one prop for an entirely different prop (cleanup likely required). **Migrate Prop** runs CopyAttr → MigNLA → MigCustProps → MigObjConst → MigObjRelatives (RetargRelatives is left out on purpose so you can scrub the timeline before/after running it). **Remove Original** is separate so you can verify the replacement before deleting. Constraints and parent hierarchies often need offsets set properly; scrub at least one frame so they snap into place.
 
 ## License
 

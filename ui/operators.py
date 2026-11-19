@@ -940,9 +940,9 @@ class DLM_OT_prop_migrator_run_all(Operator):
     bl_idname = "dlm.prop_migrator_run_all"
     bl_label = "Migrate Prop"
     bl_description = (
-        "Run all prop migration steps on Object/Collection targets "
+        "Run prop migration steps on Object/Collection targets "
         "(hierarchy-aware): CopyAttr, MigNLA, MigCustProps, MigObjConst, "
-        "MigObjRelatives, RetargRelatives"
+        "MigObjRelatives. RetargRelatives is left for you to run after scrubbing"
     )
     bl_icon = "PLAY"
     bl_options = {"REGISTER", "UNDO"}
