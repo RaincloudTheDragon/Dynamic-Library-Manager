@@ -663,6 +663,22 @@ class DLM_OT_picker_replacement_character(Operator):
         return {"FINISHED"}
 
 
+class DLM_OT_swap_characters(Operator):
+    bl_idname = "dlm.swap_characters"
+    bl_label = "Swap Original / Replacement"
+    bl_description = "Swap the Original and Replacement character armature fields"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        props = context.scene.dynamic_library_manager
+        props.original_character, props.replacement_character = (
+            props.replacement_character,
+            props.original_character,
+        )
+        self.report({"INFO"}, "Swapped Original and Replacement characters")
+        return {"FINISHED"}
+
+
 def _get_prop_migrator_pair(context):
     """Return (orig, rep) from Object-mode props, or (None, None)."""
     from ..ops.migrator import get_prop_pair
@@ -710,6 +726,29 @@ class DLM_OT_picker_replacement_prop(Operator):
             return {"CANCELLED"}
         context.scene.dynamic_library_manager.replacement_prop = obj
         self.report({"INFO"}, f"Replacement prop: {obj.name}")
+        return {"FINISHED"}
+
+
+class DLM_OT_swap_props(Operator):
+    bl_idname = "dlm.swap_props"
+    bl_label = "Swap Original / Replacement"
+    bl_description = (
+        "Swap the Original and Replacement prop fields "
+        "(and their collections when set)"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        props = context.scene.dynamic_library_manager
+        props.original_prop, props.replacement_prop = (
+            props.replacement_prop,
+            props.original_prop,
+        )
+        props.original_prop_collection, props.replacement_prop_collection = (
+            props.replacement_prop_collection,
+            props.original_prop_collection,
+        )
+        self.report({"INFO"}, "Swapped Original and Replacement props")
         return {"FINISHED"}
 
 
@@ -1181,6 +1220,7 @@ OPERATOR_CLASSES = [
     DLM_OT_migrator_remove_original,
     DLM_OT_picker_original_character,
     DLM_OT_picker_replacement_character,
+    DLM_OT_swap_characters,
     DLM_OT_migrator_copy_attributes,
     DLM_OT_migrator_migrate_nla,
     DLM_OT_migrator_custom_properties,
@@ -1191,6 +1231,7 @@ OPERATOR_CLASSES = [
     DLM_OT_migrator_basebody_shapekeys,
     DLM_OT_picker_original_prop,
     DLM_OT_picker_replacement_prop,
+    DLM_OT_swap_props,
     DLM_OT_prop_migrator_remove_original,
     DLM_OT_prop_migrator_copy_attributes,
     DLM_OT_prop_migrator_migrate_nla,
