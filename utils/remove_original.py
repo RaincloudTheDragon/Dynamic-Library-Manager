@@ -16,6 +16,24 @@ def _rm_dbg(msg):
     print(f"[DLM RmOrig] {msg}", flush=True)
 
 
+def clear_charmig_pair(props):
+    """Drop CharMig Orig/Rep PointerProperties so scene RNA does not keep those IDs alive."""
+    if props is None:
+        return
+    props.original_character = None
+    props.replacement_character = None
+
+
+def clear_propmig_pair(props):
+    """Drop PropMig Orig/Rep object and collection PointerProperties after RmOrig."""
+    if props is None:
+        return
+    props.original_prop = None
+    props.replacement_prop = None
+    props.original_prop_collection = None
+    props.replacement_prop_collection = None
+
+
 def _rm_phase(label):
     """Context-manager-like pair: call as ``t = _rm_phase('x'); ...; t()`` to log elapsed."""
     _rm_dbg(f"→ {label}")
@@ -1309,7 +1327,8 @@ def run_remove_original(context, orig, rep, report):
             )
             done(f"counts={ext_counts}")
 
-            context.scene.dynamic_library_manager.original_character = None
+            # Drop Orig pointer before unlink so scene RNA is not a lingering user during delete.
+            props.original_character = None
             if soft_remove:
                 done = _rm_phase("soft_unlink_override_instance")
                 _remove_orig_sibling_override_instance(orig, coll, report)
@@ -1365,7 +1384,7 @@ def run_remove_original(context, orig, rep, report):
                     orig.hide_render = True
                 except Exception:
                     pass
-                context.scene.dynamic_library_manager.original_character = None
+                props.original_character = None
                 soft_remove = True
                 report(
                     {"INFO"},
@@ -1373,7 +1392,7 @@ def run_remove_original(context, orig, rep, report):
                 )
             else:
                 bpy.data.objects.remove(orig, do_unlink=True)
-                context.scene.dynamic_library_manager.original_character = None
+                props.original_character = None
                 report({"INFO"}, f"Removed original character: {name}")
     except Exception as e:
         report({"ERROR"}, f"Failed to remove original: {e}")
@@ -1426,6 +1445,9 @@ def run_remove_original(context, orig, rep, report):
         extra = f" (+{len(purged) - 12} more)" if len(purged) > 12 else ""
         report({"INFO"}, f"Purged {len(purged)} leftover ID(s) from original: {preview}{extra}")
     done(f"purged={len(purged)}")
+
+    # Clear Orig+Rep after success so PointerProperties are not leftover RNA users (#15).
+    clear_charmig_pair(props)
 
     _rm_dbg(f"DONE total={time.perf_counter() - t_all:.3f}s soft_remove={soft_remove}")
     return True

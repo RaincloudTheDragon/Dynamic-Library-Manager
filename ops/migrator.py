@@ -1868,6 +1868,7 @@ def run_remove_original_prop(context, orig=None, rep=None, report=None):
     )
     from ..utils.remove_original import (
         _rename_rep_actions,
+        clear_propmig_pair,
         remove_prop_original_collection,
         run_remove_original,
     )
@@ -1917,8 +1918,9 @@ def run_remove_original_prop(context, orig=None, rep=None, report=None):
             props.original_character = primary_orig
             props.replacement_character = primary_rep
         ok = run_remove_original(context, primary_orig, primary_rep, report)
-        if ok and props is not None:
-            props.original_prop = None
+        if ok:
+            # CharMig clear is inside run_remove_original; also drop PropMig slots (#15).
+            clear_propmig_pair(props)
         return ok
 
     if mapping:
@@ -1951,9 +1953,6 @@ def run_remove_original_prop(context, orig=None, rep=None, report=None):
         )
         if not ok:
             return False
-        if props is not None:
-            props.original_prop_collection = None
-            props.original_prop = None
         renamed_total = 0
         seen_rep = set()
         for r in list(mapping.values()) if mapping else ([primary_rep] if primary_rep else []):
@@ -1963,6 +1962,7 @@ def run_remove_original_prop(context, orig=None, rep=None, report=None):
             renamed_total += len(_rename_rep_actions(r) or [])
         if renamed_total and report:
             report({"INFO"}, f"Renamed {renamed_total} replacement action(s)")
+        clear_propmig_pair(props)
         if report:
             report({"INFO"}, f"Removed original prop collection: {oc_name}")
         return True
@@ -1989,9 +1989,6 @@ def run_remove_original_prop(context, orig=None, rep=None, report=None):
             return False
         removed_names.append(name)
 
-    if props is not None:
-        props.original_prop = None
-
     renamed_total = 0
     seen_rep = set()
     for r in list(mapping.values()) if mapping else ([primary_rep] if primary_rep else []):
@@ -2002,6 +1999,7 @@ def run_remove_original_prop(context, orig=None, rep=None, report=None):
     if renamed_total and report:
         report({"INFO"}, f"Renamed {renamed_total} replacement action(s)")
 
+    clear_propmig_pair(props)
     if report:
         report(
             {"INFO"},
