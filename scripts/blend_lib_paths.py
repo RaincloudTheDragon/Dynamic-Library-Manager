@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-or-later
 """Read nested Library link paths from a .blend without launching Blender.
 
 Primary: blender_asset_tracer (optional). Fallback: scan LI blocks for .blend paths.

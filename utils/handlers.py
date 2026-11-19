@@ -1,8 +1,3 @@
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation; either version 3 of the License, or
-# (at your option) any later version.
-
 """Blender app handlers for Missing Library Propagation (legacy pending_apply after load).
 
 New flow: Revert and Remap are separate operators; Remap uses wm.lib_relocate and does not save.

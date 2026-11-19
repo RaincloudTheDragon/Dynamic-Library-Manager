@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-or-later
 """Session search index for Missing Library Propagation (.blend paths under search roots).
 
 Same idea as Atomic Data Manager's process-lifetime Search Missing index: walk once,

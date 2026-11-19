@@ -1,8 +1,3 @@
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation; either version 3 of the License, or
-# (at your option) any later version.
-
 """Library path helpers for Missing Library Propagation (apply after stubs).
 
 Default scope: missing libraries that contribute armatures (pose / bone data lost on load when the lib is missing; Blender #143902) or Geometry Nodes trees (GN overrides can reset the same way). Other missing links stay for the wizard's "Propagate other libraries" checkbox, Atomic Remap, FMT, or File → External Data.

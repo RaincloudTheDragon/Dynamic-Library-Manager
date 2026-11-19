@@ -94,7 +94,7 @@ Same idea for a non-armature pair — replace old props with new versions, or sw
 
 ## License
 
-GPL-3.0-or-later
+[Unlicense](https://unlicense.org) — see [LICENSE](LICENSE).
 
 ## Links
 

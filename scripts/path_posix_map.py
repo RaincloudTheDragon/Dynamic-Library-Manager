@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-or-later
 """Windows path ↔ POSIX mapping for SSH stub creation on Linux SMB hosts.
 
 Maps are persisted under %LOCALAPPDATA%/DynamicLibraryManager (not Blender prefs)

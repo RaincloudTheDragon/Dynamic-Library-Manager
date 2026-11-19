@@ -8,7 +8,7 @@ type = "add-on"
 
 # Optional: Semantic Versioning
 maintainer = "RaincloudTheDragon <raincloudthedragon@gmail.com>"
-license = ["GPL-3.0-or-later"]
+license = ["Unlicense"]
 blender_version_min = "4.5.0"
 
 website = "https://github.com/RaincloudTheDragon/Dynamic-Library-Manager"
