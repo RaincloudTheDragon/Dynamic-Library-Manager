@@ -1616,6 +1616,184 @@ def remap_parents(mapping):
     return n
 
 
+def _is_path_or_ride_helper(ob):
+    """True when *ob* is a typical MigObjRelatives path/ride parent (Empty or Armature)."""
+    if ob is None:
+        return False
+    return getattr(ob, "type", None) in {"EMPTY", "ARMATURE"}
+
+
+def _adopt_object_out_of_doomed(ob, doomed, scene, rep=None, mapping=None):
+    """
+    Keep *ob* alive when external deps still need it: unlink from doomed collections, link under Props/scene, drop from *doomed*.
+
+    If its parent is also doomed, reparent onto the mapped replacement or *rep* so purge/reload cannot clear the parent edge.
+    """
+    if ob is None:
+        return False
+    mapping = mapping or {}
+    scene = scene or bpy.context.scene
+    # Reparent off doomed parents before collection surgery.
+    parent = getattr(ob, "parent", None)
+    if parent is not None and parent in doomed:
+        new_parent = mapping.get(parent) or rep
+        if new_parent is not None and new_parent != ob:
+            reparent_preserve_world_path(ob, new_parent, old_parent=parent)
+        else:
+            try:
+                ob.parent = None
+            except Exception:
+                pass
+    for coll in list(ob.users_collection):
+        try:
+            coll.objects.unlink(ob)
+        except Exception:
+            pass
+    dest = bpy.data.collections.get("Props")
+    if dest is None:
+        dest = scene.collection
+    try:
+        if ob.name not in dest.objects:
+            dest.objects.link(ob)
+    except Exception:
+        pass
+    doomed.discard(ob)
+    return True
+
+
+def refresh_external_doomed_deps(doomed, mapping, rep, scene=None, report=None):
+    """
+    Before RmOrig deletes/soft-unlinks *doomed*, retarget or adopt external dependents.
+
+    When an Empty (or other helper) that external objects still parent/Child-Of to lives under the collection RmOrig will remove, mapped IDs are already remapped but unmapped helpers still evaluate in-session and only break on purge/save+reload. This pass closes that gap:
+    - object parent / CHILD_OF → unmapped Empty/Armature: retarget to *rep* (world / Child Of inverse preserved)
+    - other constraint targets → unmapped doomed: adopt the target out of the doomed tree
+
+    Mutates *doomed* when adopting. Returns counts dict.
+    """
+    scene = scene or bpy.context.scene
+    mapping = dict(mapping or {})
+    doomed = doomed if isinstance(doomed, set) else set(doomed or ())
+    counts = {"retargeted_parent": 0, "retargeted_childof": 0, "adopted": 0}
+    if not doomed:
+        return counts
+
+    unmapped = {t for t in doomed if t not in mapping and t is not None}
+    if not unmapped:
+        _remap_dbg("external doomed deps: nothing unmapped")
+        return counts
+
+    # Owners that still point at unmapped doomed IDs (constraints via user_map; parents via belt).
+    owners_by_target = {t: set() for t in unmapped}
+    umap = _user_map_for_ids(list(unmapped))
+    for t in unmapped:
+        for u in umap.get(t, ()):
+            if not isinstance(u, bpy.types.Object):
+                continue
+            if u in doomed:
+                continue
+            owners_by_target[t].add(u)
+    for ob in bpy.data.objects:
+        if ob in doomed:
+            continue
+        parent = getattr(ob, "parent", None)
+        if parent in unmapped:
+            owners_by_target[parent].add(ob)
+
+    adopt_targets = set()
+    touched_owners = set()
+
+    for target, owners in list(owners_by_target.items()):
+        if not owners:
+            continue
+        for owner in list(owners):
+            # Object parenting onto a doomed path/ride helper → ride the replacement; otherwise adopt the parent ID.
+            if owner.parent == target:
+                if (
+                    rep is not None
+                    and _is_path_or_ride_helper(target)
+                    and reparent_preserve_world_path(owner, rep, old_parent=target)
+                ):
+                    counts["retargeted_parent"] += 1
+                    touched_owners.add(owner)
+                    _remap_dbg(
+                        f"external parent {owner.name!r}: {target.name!r} -> {rep.name!r}"
+                    )
+                else:
+                    adopt_targets.add(target)
+                continue
+
+            # CHILD_OF onto doomed Empty/Armature → same as MigObjRelatives override-safe parent.
+            for c in list(getattr(owner, "constraints", []) or []):
+                if getattr(c, "target", None) != target:
+                    continue
+                if (
+                    c.type == "CHILD_OF"
+                    and rep is not None
+                    and _is_path_or_ride_helper(target)
+                ):
+                    old_tgt = target
+                    try:
+                        c.target = rep
+                    except Exception:
+                        adopt_targets.add(target)
+                        continue
+                    _childof_retarget_inverse(c, old_tgt, rep)
+                    try:
+                        c.name = rep.name
+                    except Exception:
+                        pass
+                    counts["retargeted_childof"] += 1
+                    touched_owners.add(owner)
+                    _remap_dbg(
+                        f"external Child Of {owner.name!r}: "
+                        f"{old_tgt.name!r} -> {rep.name!r}"
+                    )
+                else:
+                    # Grabbers / Copy Transforms / etc.: keep the helper, don't point at rep armature.
+                    adopt_targets.add(target)
+
+            # Bone constraints (hands → PJ_grabber): adopt, never retarget to rep root.
+            if owner.type == "ARMATURE" and owner.pose:
+                for pbone in owner.pose.bones:
+                    for c in pbone.constraints:
+                        if getattr(c, "target", None) == target:
+                            adopt_targets.add(target)
+
+    for target in list(adopt_targets):
+        if target not in doomed:
+            continue
+        if _adopt_object_out_of_doomed(
+            target, doomed, scene, rep=rep, mapping=mapping
+        ):
+            counts["adopted"] += 1
+            _remap_dbg(f"adopted {target.name!r} out of doomed tree")
+            if report:
+                report(
+                    {"WARNING"},
+                    f"Adopted {target.name!r} out of removed hierarchy "
+                    f"(still referenced outside original)",
+                )
+
+    for owner in touched_owners:
+        refresh_object_after_relation_edit(owner)
+
+    if any(counts.values()):
+        _remap_dbg(
+            f"external doomed deps: parent={counts['retargeted_parent']} "
+            f"childof={counts['retargeted_childof']} adopted={counts['adopted']}"
+        )
+        if report and (counts["retargeted_parent"] or counts["retargeted_childof"]):
+            report(
+                {"INFO"},
+                "RmOrig refreshed external hierarchy deps: "
+                f"parent={counts['retargeted_parent']}, "
+                f"ChildOf={counts['retargeted_childof']}, "
+                f"adopted={counts['adopted']}",
+            )
+    return counts
+
+
 def remap_object_usages(
     src,
     dst,

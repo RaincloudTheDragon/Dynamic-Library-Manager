@@ -1861,7 +1861,11 @@ def run_remove_original_prop(context, orig=None, rep=None, report=None):
     Object mode + armature: delegates to Character Migrator Remove Original.
     Object mode otherwise: remaps hierarchy map and removes each orig-side object.
     """
-    from ..utils.remap_usages import remap_object_usages, remap_parents
+    from ..utils.remap_usages import (
+        refresh_external_doomed_deps,
+        remap_object_usages,
+        remap_parents,
+    )
     from ..utils.remove_original import (
         _rename_rep_actions,
         remove_prop_original_collection,
@@ -1938,7 +1942,12 @@ def run_remove_original_prop(context, orig=None, rep=None, report=None):
             return False
         oc_name = oc.name
         ok = remove_prop_original_collection(
-            oc, primary_orig, primary_rep, report, scene=context.scene
+            oc,
+            primary_orig,
+            primary_rep,
+            report,
+            scene=context.scene,
+            mapping=mapping,
         )
         if not ok:
             return False
@@ -1962,6 +1971,17 @@ def run_remove_original_prop(context, orig=None, rep=None, report=None):
     orig_objs = list(mapping.keys()) if mapping else ([primary_orig] if primary_orig else [])
     orig_objs = [o for o in orig_objs if o is not None and o.name in bpy.data.objects]
     orig_objs.sort(key=lambda ob: (-sum(1 for _ in _parent_chain(ob)), ob.name))
+    # External objects may still Child-Of / parent helpers among these objects; refresh before delete.
+    if orig_objs:
+        doomed = set(orig_objs)
+        refresh_external_doomed_deps(
+            doomed,
+            mapping or {},
+            primary_rep,
+            scene=context.scene,
+            report=report,
+        )
+        orig_objs = [o for o in orig_objs if o in doomed and o.name in bpy.data.objects]
     removed_names = []
     for ob in orig_objs:
         name = ob.name

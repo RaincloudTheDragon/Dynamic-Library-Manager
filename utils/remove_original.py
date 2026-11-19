@@ -501,13 +501,12 @@ def remove_unused_override_armatures(keep=None, keep_ids=None):
     return removed
 
 
-def remove_prop_original_collection(coll, orig, rep, report, scene=None):
+def remove_prop_original_collection(coll, orig, rep, report, scene=None, mapping=None):
     """
     Remove an entire PropMig original collection (Collection-mode RmOrig).
 
-    Override trees soft-unlink (template-preserving). Local collections are
-    deleted with ``collections.remove``, then exclusive leftover objects.
-    Never deletes IDs still owned by the replacement hierarchy.
+    Override trees soft-unlink (template-preserving). Local collections are deleted with ``collections.remove``, then exclusive leftover objects. Never deletes IDs still owned by the replacement hierarchy.
+    *mapping* is the orig→rep object map from PropMig (used to refresh external Child Of / parent deps before unlink).
     Returns True on success.
     """
     from .remap_usages import (
@@ -515,6 +514,7 @@ def remove_prop_original_collection(coll, orig, rep, report, scene=None):
         is_library_override_id,
         needs_template_preserving_remove,
         override_root_collection,
+        refresh_external_doomed_deps,
     )
 
     if coll is None or coll.name not in bpy.data.collections:
@@ -554,6 +554,14 @@ def remove_prop_original_collection(coll, orig, rep, report, scene=None):
             if data is not None:
                 keep.add(data)
     doomed -= keep
+
+    # External objects may still Child-Of / parent a helper Empty in this collection; refresh before unlink.
+    map_for_refresh = dict(mapping or {})
+    if orig is not None and rep is not None:
+        map_for_refresh[orig] = rep
+    refresh_external_doomed_deps(
+        doomed, map_for_refresh, rep, scene=scene, report=report
+    )
 
     coll_name = coll.name
     try:
@@ -1086,6 +1094,7 @@ def run_remove_original(context, orig, rep, report):
         build_override_collection_object_map,
         consolidate_migration_armature,
         needs_template_preserving_remove,
+        refresh_external_doomed_deps,
         remap_object_usages,
         remap_parents,
         resolve_migration_armature,
@@ -1215,6 +1224,7 @@ def run_remove_original(context, orig, rep, report):
         keep_ids |= template_keep
 
     # Final sweep: remap remaining scene refs off orig (+ GEO/Jiffy in its override).
+    mapping = {}
     if rep is not None and orig != rep:
         done = _rm_phase("build_override_collection_object_map")
         mapping = build_override_collection_object_map(orig, rep)
@@ -1291,6 +1301,13 @@ def run_remove_original(context, orig, rep, report):
                         keep.add(data)
             doomed -= keep
             done(f"doomed={len(doomed)} keep={len(keep)}")
+
+            # External objects may still Child-Of / parent helpers inside the doomed collection. Retarget or adopt before unlink so purge/reload cannot throw them.
+            done = _rm_phase("refresh_external_doomed_deps")
+            ext_counts = refresh_external_doomed_deps(
+                doomed, mapping, rep, scene=context.scene, report=report
+            )
+            done(f"counts={ext_counts}")
 
             context.scene.dynamic_library_manager.original_character = None
             if soft_remove:
