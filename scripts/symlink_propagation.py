@@ -197,21 +197,10 @@ def run_symlinker(
 
 
 def related_basenames(basename: str) -> list[str]:
-    """Exact basename plus *_baked / un-baked sibling names for search."""
+    """Basenames to search for (exact name only)."""
     if not basename:
         return []
-    stem, ext = os.path.splitext(basename)
-    if ext.lower() != ".blend":
-        return [basename]
-    out = [basename]
-    low = stem.lower()
-    if low.endswith("_baked"):
-        sibling = stem[: -len("_baked")] + ext
-    else:
-        sibling = stem + "_baked" + ext
-    if sibling.lower() != basename.lower():
-        out.append(sibling)
-    return out
+    return [basename]
 
 
 # Leading archive stamp on the filename: 2025.06.11.14.42.14_Name.blend
@@ -359,13 +348,8 @@ def rank_modern_hits(candidates: list[str], *, want_basename: str = "") -> list[
         elif want and _is_timestamp_prefixed_basename(base, want):
             # Date-stamped archive copy of the same basename.
             s += 160
-        elif want:
-            # Related baked/unbaked sibling — keep visible but below exact.
-            s += 40
         if "\\0 ASSETARCHIVE\\" in u or u.endswith("\\0 ASSETARCHIVE") or "\\ASSETARCHIVE\\" in u:
             s += 100
-        if "CHARACTERS-BAKED" in u and ("_baked" in want or "characters-baked" in want):
-            s += 30
         # Nested project false tree: ...\\SomeProject\\1 BlenderAssets\\...
         if "\\1 BLENDERASSETS\\" in u:
             parts = u.split("\\")
@@ -547,9 +531,22 @@ class SymlinkPropagationApp(tk.Tk):
                     "kind": m.get("kind", "library"),
                     "modern_path": m.get("modern_path", ""),
                     "candidates": [],
-                    "is_armature": bool(m.get("is_armature", m.get("requires_armature_data", True))),
+                    "is_armature": bool(m.get("is_armature", False)),
+                    "is_geometry_nodes": bool(m.get("is_geometry_nodes", False)),
+                    "in_default_scope": bool(
+                        m.get(
+                            "in_default_scope",
+                            m.get(
+                                "is_armature",
+                                m.get("requires_armature_data", True),
+                            ),
+                        )
+                    ),
                     "requires_armature_data": bool(
-                        m.get("requires_armature_data", m.get("is_armature", True))
+                        m.get(
+                            "requires_armature_data",
+                            m.get("is_armature", False),
+                        )
                     ),
                 }
             )
@@ -692,21 +689,21 @@ class SymlinkPropagationApp(tk.Tk):
 
         scope_row = ttk.Frame(top)
         scope_row.pack(fill=tk.X, pady=(4, 0))
-        n_other = sum(1 for r in self.all_rows if not r.get("is_armature"))
+        n_other = sum(1 for r in self.all_rows if not r.get("in_default_scope", r.get("is_armature")))
         cb_non_arm = ttk.Checkbutton(
             scope_row,
-            text="Propagate non-armature libraries",
+            text="Propagate other libraries",
             variable=self.include_non_armature,
             command=self._on_include_non_armature_toggle,
         )
         cb_non_arm.pack(side=tk.LEFT)
         WidgetHoverTip(
             cb_non_arm,
-            "Off (default): only missing armature / baked character libraries "
-            "(pose data is lost if those libs are absent on load).\n\n"
-            "On: also stub every other missing .blend library — use when "
-            "non-armature library overrides drop data if the lib is missing on reload.\n\n"
-            f"{n_other} non-armature missing librar(ies) in this session.",
+            "Off (default): only missing libraries that contribute an armature or "
+            "Geometry Nodes override in this file (pose / GN override data are lost if "
+            "those libs are absent on load).\n\n"
+            "On: also stub every other missing .blend library.\n\n"
+            f"{n_other} other missing librar(ies) in this session.",
         )
 
         mid = ttk.Frame(self)
@@ -925,12 +922,16 @@ class SymlinkPropagationApp(tk.Tk):
         return ""
 
     def _apply_row_filter(self, *, refresh_tree: bool = True) -> None:
-        """Set self.rows from all_rows based on the non-armature checkbox."""
+        """Set self.rows from all_rows based on the 'Propagate other libraries' checkbox."""
         include = bool(self.include_non_armature.get())
         if include:
             self.rows = list(self.all_rows)
         else:
-            self.rows = [r for r in self.all_rows if r.get("is_armature")]
+            self.rows = [
+                r
+                for r in self.all_rows
+                if r.get("in_default_scope", r.get("is_armature"))
+            ]
         self.session["include_non_armature"] = include
         save_session(self.session_file, self.session)
         if refresh_tree and getattr(self, "tree", None) is not None:
@@ -946,12 +947,12 @@ class SymlinkPropagationApp(tk.Tk):
         n_hidden = n_all - n_show
         if self.include_non_armature.get():
             self.status_var.set(
-                f"{n_show} missing libraries (including non-armature). "
+                f"{n_show} missing libraries (including other libs). "
                 "Search, Auto-map POSIX (for SMB), then Create stubs."
             )
         elif n_hidden:
             self.status_var.set(
-                f"{n_show} armature libraries ({n_hidden} non-armature hidden). "
+                f"{n_show} armature/GN libraries ({n_hidden} other hidden). "
                 "Search, Auto-map POSIX (for SMB), then Create stubs."
             )
         else:
@@ -1245,6 +1246,10 @@ class SymlinkPropagationApp(tk.Tk):
                 "needs_stub": True,
                 "stub_mode": mode,
                 "is_armature": bool(r.get("is_armature")),
+                "is_geometry_nodes": bool(r.get("is_geometry_nodes")),
+                "in_default_scope": bool(
+                    r.get("in_default_scope", r.get("is_armature"))
+                ),
                 "requires_armature_data": bool(r.get("requires_armature_data")),
             }
             for r in self.rows

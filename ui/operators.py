@@ -55,7 +55,7 @@ class DLM_OT_symlink_propagation(Operator):
     bl_idname = "dlm.symlink_propagation"
     bl_label = "Missing Library Propagation"
     bl_description = (
-        "Stub missing libraries (armature libs by default; non-armature optional in the wizard). "
+        "Stub missing libraries (armature / Geometry Nodes libs by default; others optional in the wizard). "
         "After stubs: Revert, verify hits, then Remap (no auto-save)"
     )
     bl_options = {"REGISTER"}
@@ -98,8 +98,10 @@ class DLM_OT_symlink_propagation(Operator):
             self.report({"INFO"}, "No missing libraries — nothing to propagate.")
             return {"FINISHED"}
 
-        n_arm = sum(1 for m in missing if m.get("is_armature"))
-        n_other = len(missing) - n_arm
+        n_scope = sum(
+            1 for m in missing if m.get("in_default_scope", m.get("is_armature"))
+        )
+        n_other = len(missing) - n_scope
 
         from ..ui.preferences import get_prefs_search_paths
 
@@ -121,16 +123,16 @@ class DLM_OT_symlink_propagation(Operator):
             self.report({"ERROR"}, result.get("error") or "Failed to open wizard")
             return {"CANCELLED"}
         extra = ""
-        if n_arm == 0 and n_other:
+        if n_scope == 0 and n_other:
             extra = (
-                f" (no armature libs; enable Propagate non-armature libraries "
+                f" (no armature/GN libs; enable Propagate other libraries "
                 f"for {n_other} other missing lib(s))"
             )
         elif n_other:
-            extra = f" ({n_other} non-armature hidden until wizard checkbox)"
+            extra = f" ({n_other} other libs hidden until wizard checkbox)"
         self.report(
             {"INFO"},
-            f"Wizard opened with {n_arm} armature library(ies){extra}. "
+            f"Wizard opened with {n_scope} armature/GN library(ies){extra}. "
             "After stubs: Revert → verify → Remap (no auto-save).",
         )
         return {"FINISHED"}

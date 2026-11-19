@@ -1,12 +1,12 @@
 # Dynamic Library Manager
 
-Character migrator and linked library tools for Blender. Swap a linked character or prop for a newer asset without rebuilding NLA, constraints, parenting, or scene references by hand — and restub missing armature libraries so pose data survives a rempath.
+Character migrator and linked library tools for Blender. Swap a linked character or prop for a newer asset without rebuilding NLA, constraints, parenting, or scene references by hand — and restub missing armature / Geometry Nodes libraries so pose and GN override data survive a rempath.
 
 Officially supports Blender 4.5 LTS to 5.2 LTS.
 
 ## Features
 
-* **Missing Library Propagation** — Stub missing libraries so override/pose data survives rempath. Wizard defaults to armature libs; optional **Propagate non-armature libraries** checkbox includes the rest. Then reload and Remap in Blender.
+* **Missing Library Propagation** — Stub missing libraries so override/pose data survives rempath. Wizard defaults to armature and Geometry Nodes libs; optional **Propagate other libraries** checkbox includes the rest. Then reload and Remap in Blender.
 * **Character Migrator** — This feature set allows you to migrate a fully animated character in a scene, with a replacement. You can choose a new version of the same character, or replace an entirely different character with another character. The possibilities are (close to) endless! Supports Rigify (especially Character Creator rigs) and Auto-Rig Pro* characters.
 * **Prop Migrator** — The same pipeline for non-armature objects (meshes, empties, curves).
 * **Situational fixes** — Base body shape keys and FK arm/finger rotation copy (with bake). Designed for Character Creator rigs.
@@ -35,7 +35,7 @@ Open **3D Viewport → Sidebar (N) → Dynamic Library Manager**.
 
 ### Missing Library Propagation
 
-Pose data is lost if armature libraries are missing on load, as documented in [#90924](https://projects.blender.org/blender/blender/issues/90924), [#143902](https://projects.blender.org/blender/blender/issues/143902), and other official Blender issues. Non-armature library overrides can also drop data when the lib is absent on reload — enable **Propagate non-armature libraries** in the wizard (off by default) to stub those too.
+Pose data is lost if armature libraries are missing on load, as documented in [#90924](https://projects.blender.org/blender/blender/issues/90924), [#143902](https://projects.blender.org/blender/blender/issues/143902), and other official Blender issues. Geometry Nodes library overrides can reset the same way when their lib is absent on reload, so the wizard includes those by default too. Other missing libs stay optional via **Propagate other libraries** (off by default), or use Atomic Remap / FMT / External Data.
 
 > Pose data is not preserved if Armature data is lost or modified.
 
@@ -48,12 +48,12 @@ The latter cause is irrelevant here: pose data doesn't need to be preserved when
 
 It is theoretically possible to keep pose data until libraries are relinked, and only drop it when the relinked library has modified armature data. With Blender's current logic that is not simple — it would need a deep refactor of how pose data and the Armature ID (and its bones) are linked and handled. The **Core** and **Animation & Rigging** module developers are aware of this and would like to improve it, but it is not on any current milestone. It will likely be years before that refactor happens; it may or may not land in a Winter of Quality, but not in 2026. In the meantime, a workaround is required.
 
-By default the wizard lists armature / baked character libraries only. Tick **Propagate non-armature libraries** to include every other missing `.blend` in the same stub/Remap pass (or use Atomic Remap / FMT / External Data for those).
+By default the wizard lists missing libraries that contribute an armature or Geometry Nodes override in the open file. Tick **Propagate other libraries** to include every other missing `.blend` in the same stub/Remap pass (or use Atomic Remap / FMT / External Data for those).
 
 In most cases the library data has not been lost; the libraries are valid, they just cannot be found on load. To load the blendfile as saved, the valid files must sit at the **exact** paths stored in the blendfile — by copying blends into those locations, or by reverting to the right revision in version control (and only if relative paths were used). Absolute paths make this worse on Windows (drive letters, network drives). That workaround was tedious, so I automated it as follows:
 
 1. Set **Default Search Roots** in addon preferences (folders of modern `.blend` files).
-2. Click **Missing Library Propagation**. In the external wizard you can search (or remove) default paths, or add new ones. Optionally enable **Propagate non-armature libraries**. When hits are found, click **Create stubs**. Search builds a session `.blend` path index under those roots (reused until roots change or **Clear Search Index**). If a library has multiple hits, Search defaults to the top-ranked path and shows `ok · N hits` so you can review with **Pick Hit** (double-click the row; arrows + Enter) at your leisure. Create stubs also walks each hit’s nested Library links and adds **companion stubs** for missing chain deps (e.g. prop.blend → mats.blend) without overwriting existing files.
+2. Click **Missing Library Propagation**. In the external wizard you can search (or remove) default paths, or add new ones. Optionally enable **Propagate other libraries**. When hits are found, click **Create stubs**. Search builds a session `.blend` path index under those roots (reused until roots change or **Clear Search Index**). If a library has multiple hits, Search defaults to the top-ranked path and shows `ok · N hits` so you can review with **Pick Hit** (double-click the row; arrows + Enter) at your leisure. Create stubs also walks each hit’s nested Library links and adds **companion stubs** for missing chain deps (e.g. prop.blend → mats.blend) without overwriting existing files.
 3. When stubs are ready, **Revert**, verify hits, then **Remap** (Remap does not auto-save). DLM Revert reloads the file with Load UI off so your workspace and the DLM sidebar stay put.
 4. Return to the wizard and tear down stubs when you are done.
 

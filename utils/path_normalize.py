@@ -5,10 +5,7 @@
 
 """Library path helpers for Missing Library Propagation (apply after stubs).
 
-Scope: only missing libraries that contribute armatures (pose / bone data is
-lost on load when the lib is missing — Blender #143902). Other missing links
-are left for Atomic Remap (recommended), FMT (images), or a generic blendfile
-path search / File → External Data.
+Default scope: missing libraries that contribute armatures (pose / bone data lost on load when the lib is missing; Blender #143902) or Geometry Nodes trees (GN overrides can reset the same way). Other missing links stay for the wizard's "Propagate other libraries" checkbox, Atomic Remap, FMT, or File → External Data.
 """
 
 from __future__ import annotations
@@ -86,23 +83,51 @@ def library_links_armature(lib) -> bool:
     return False
 
 
-def library_is_baked_character_path(lib) -> bool:
-    """True if this library looks like a Characters-Baked / *_baked.blend asset."""
-    name = (getattr(lib, "name", "") or "").lower()
-    raw = (getattr(lib, "filepath", "") or "").replace("/", "\\").lower()
-    if "_baked" in name or "_baked" in os.path.basename(raw):
+def _id_from_library_or_override(idb, lib) -> bool:
+    """True if *idb* is linked from *lib* or overrides a reference from *lib*."""
+    if idb is None or lib is None:
+        return False
+    if getattr(idb, "library", None) == lib:
         return True
-    if "characters-baked" in raw:
-        return True
+    ov = getattr(idb, "override_library", None)
+    if not ov:
+        return False
+    ref = getattr(ov, "reference", None)
+    return ref is not None and getattr(ref, "library", None) == lib
+
+
+def library_links_geometry_nodes(lib) -> bool:
+    """True if *lib* owns or is the override source of any Geometry Nodes tree (or a Nodes modifier's group)."""
+    if lib is None:
+        return False
+
+    for ng in bpy.data.node_groups:
+        if getattr(ng, "type", None) != "GEOMETRY":
+            continue
+        if _id_from_library_or_override(ng, lib):
+            return True
+
+    # Modifier pointers can outlive a purged/unlisted group name on missing-lib loads.
+    for obj in bpy.data.objects:
+        for mod in getattr(obj, "modifiers", []) or []:
+            if getattr(mod, "type", None) != "NODES":
+                continue
+            if _id_from_library_or_override(getattr(mod, "node_group", None), lib):
+                return True
+
     return False
+
+
+def library_in_default_mlp_scope(lib) -> bool:
+    """True when Missing Library Propagation should list *lib* with the default (non-checkbox) filter."""
+    return library_links_armature(lib) or library_links_geometry_nodes(lib)
 
 
 def collect_missing_libraries() -> list[dict[str, Any]]:
     """
     All missing .blend libraries (unique by absolute path).
 
-    Each entry is tagged with ``is_armature`` / ``requires_armature_data`` so the
-    wizard can default to armature/baked rows and optionally include the rest.
+    Each entry is tagged so the wizard can default to armature / Geometry Nodes rows (``in_default_scope``: lib contributes an armature or GN override in this file) and optionally include the rest. ``requires_armature_data`` stays True only for armature rows (Remap readiness).
     """
     out = []
     seen = set()
@@ -119,7 +144,9 @@ def collect_missing_libraries() -> list[dict[str, Any]]:
         seen.add(key)
         if os.path.isfile(archaic):
             continue
-        is_arm = library_links_armature(lib) or library_is_baked_character_path(lib)
+        is_arm = library_links_armature(lib)
+        is_gn = library_links_geometry_nodes(lib)
+        in_scope = bool(is_arm or is_gn)
         out.append(
             {
                 "archaic_path": archaic,
@@ -129,7 +156,10 @@ def collect_missing_libraries() -> list[dict[str, Any]]:
                 "kind": "library",
                 "modern_path": "",
                 "is_armature": bool(is_arm),
-                # Remap readiness: armature/baked rows must expose armature data after stub load.
+                "is_geometry_nodes": bool(is_gn),
+                # Default wizard filter (armature / GN in this file). Legacy sessions may only have is_armature.
+                "in_default_scope": in_scope,
+                # Remap readiness: only armature rows must expose armature data after stub load.
                 "requires_armature_data": bool(is_arm),
             }
         )
@@ -420,8 +450,7 @@ def remap_readiness(plan: list[dict[str, Any]]) -> tuple[bool, str]:
 
     For each in-scope lib:
       - already on modern path → ok (no stub required)
-      - still archaic → modern + archaic stub must exist; lib must load with
-        armature/baked data (not is_missing, not empty stub hit)
+      - still archaic → modern + archaic stub must exist; armature-scoped rows must load with armature data (not is_missing, not empty stub hit)
     """
     needing: list[str] = []
     already_modern: list[str] = []
@@ -455,12 +484,10 @@ def remap_readiness(plan: list[dict[str, Any]]) -> tuple[bool, str]:
         if getattr(lib, "is_missing", False):
             still_missing.append(lib.name)
             continue
-        # Armature/baked rows must expose armature data after stub load (bad hit).
-        # Non-armature rows (Propagation scope = All) set requires_armature_data False.
-        # Legacy plan rows omit the flag — treat as armature-scoped.
-        if pair.get("requires_armature_data", True) and not (
-            library_links_armature(lib) or library_is_baked_character_path(lib)
-        ):
+        # Armature rows must expose armature data after stub load (bad hit).
+        # GN / "Propagate other libraries" rows set requires_armature_data False.
+        # Legacy plan rows omit the flag; treat as armature-scoped.
+        if pair.get("requires_armature_data", True) and not library_links_armature(lib):
             no_arm_data.append(lib.name)
             continue
         needing.append(lib.name)
