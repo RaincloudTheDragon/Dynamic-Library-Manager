@@ -75,8 +75,8 @@ There are many modes by which the stubs can be created, the default is a simple 
 
 | Operator | What it does |
 | --- | --- |
-| CopyAttr | Copies the armature's object attributes from OrigChar to RepChar. `Copy Attributes Menu` extension required. |
-| MigNLA | Migrates NLA tracks, action slots, unkeyed pose/object transforms. If an action is not in the NLA evaluation stack (pulled down) it will not be migrated because DLM cannot (yet?) tell the difference between the active action slot and an action in tweak mode, so anything that's currently active is ignored. Keep in mind that RepChar's actions are not 1:1 with Orig's; they will be named `*.rep` until **Remove Original** is run. |
+| CopyAttr | Copies the armature object's location/rotation/scale from OrigChar to RepChar (sets `rotation_mode` first so quat/euler land correctly). `Copy Attributes Menu` extension required. |
+| MigNLA | Migrates NLA tracks, action slots, unkeyed pose/object transforms. Syncs `rotation_mode` (quat/euler/axis-angle) on the armature object and same-named pose bones so migrated fcurves evaluate on the right channels. If an action is not in the NLA evaluation stack (pulled down) it will not be migrated because DLM cannot (yet?) tell the difference between the active action slot and an action in tweak mode, so anything that's currently active is ignored. Keep in mind that RepChar's actions are not 1:1 with Orig's; they will be named `*.rep` until **Remove Original** is run. |
 | MigCustProps | Migrates each bone's Custom Properties override from Orig to Repchar, e.g. unkeyframed IK/FK switch value |
 | MigObjConst | Migrates object constraints of the Armature Object itself (names kept for NLA) |
 | MigObjRelatives | Migrates Parenting of the Armature Object (Child Of when the parent is outside an override hierarchy) |

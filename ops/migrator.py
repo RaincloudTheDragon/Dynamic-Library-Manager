@@ -227,9 +227,29 @@ def _flush_object_override_ops(ob):
         print(f"[DLM] {ob.name!r} override operations_update failed: {e}")
 
 
+def _sync_rotation_modes(orig, rep):
+    """Copy rotation_mode (quat/euler/axis-angle) from orig→rep object and same-named pose bones (#12)."""
+    if not orig or not rep:
+        return 0
+    n = 0
+    if rep.rotation_mode != orig.rotation_mode:
+        rep.rotation_mode = orig.rotation_mode
+        n += 1
+    if not getattr(orig, "pose", None) or not getattr(rep, "pose", None):
+        return n
+    for pb in orig.pose.bones:
+        rb = rep.pose.bones.get(pb.name)
+        if rb is None or rb.rotation_mode == pb.rotation_mode:
+            continue
+        rb.rotation_mode = pb.rotation_mode
+        n += 1
+    return n
+
+
 def run_copy_attr(orig, rep, *, retain_scale=False):
     """Copy object location and rotation from orig to rep (CopyAttr).
 
+    Sets rotation_mode first so quat/euler/axis-angle values land on the right channels.
     When *retain_scale* is True (Retain scale on), leave rep scale unchanged.
     When False (normal), also copy scale from orig.
 
@@ -237,9 +257,12 @@ def run_copy_attr(orig, rep, *, retain_scale=False):
     persist as real REPLACE operations.
     """
     _ensure_object_override_editable(rep)
+    rep.rotation_mode = orig.rotation_mode
     rep.location = orig.location.copy()
     if orig.rotation_mode == "QUATERNION":
         rep.rotation_quaternion = orig.rotation_quaternion.copy()
+    elif orig.rotation_mode == "AXIS_ANGLE":
+        rep.rotation_axis_angle = orig.rotation_axis_angle[:]
     else:
         rep.rotation_euler = orig.rotation_euler.copy()
     if not retain_scale:
@@ -656,9 +679,8 @@ def _copy_pose_bone_channels(src, dst, keyed_kinds=None):
     )
     n += _copy_vector_unkeyed(src.scale, dst.scale, keyed_kinds.get("scale"), 3)
     rot_keyed = keyed_kinds.get("rotation")
-    # Match dst rotation mode to src before writing components.
-    if rot_keyed is None or len(rot_keyed) < _axis_count("rotation", src.rotation_mode):
-        dst.rotation_mode = src.rotation_mode
+    # Always match dst rotation mode to src before writing components (#12).
+    dst.rotation_mode = src.rotation_mode
     if src.rotation_mode == "QUATERNION":
         n += _copy_vector_unkeyed(
             src.rotation_quaternion, dst.rotation_quaternion, rot_keyed, 4
@@ -704,8 +726,8 @@ def _copy_unkeyed_object_transform(orig, rep, *, retain_scale=False):
     if not retain_scale:
         n += _copy_vector_unkeyed(orig.scale, rep.scale, keyed.get("scale"), 3)
     rot_keyed = keyed.get("rotation")
-    if rot_keyed is None or len(rot_keyed) < _axis_count("rotation", orig.rotation_mode):
-        rep.rotation_mode = orig.rotation_mode
+    # Always sync mode so keyed euler/quat fcurves evaluate on the right channels (#12).
+    rep.rotation_mode = orig.rotation_mode
     if orig.rotation_mode == "QUATERNION":
         n += _copy_vector_unkeyed(
             orig.rotation_quaternion, rep.rotation_quaternion, rot_keyed, 4
@@ -829,6 +851,7 @@ def run_mig_nla(
     what Blender actually plays.
 
     Actions are duplicated so repchar has independent copies.
+    Syncs rotation_mode (quat/euler) on the object and same-named pose bones first (#12).
     Copies unkeyed pose. Object transforms skipped when *retain_transforms*;
     else loc/rot always and scale unless *retain_scale*.
     Pass context so Animation Layers mirroring runs with rep as active object."""
@@ -839,6 +862,9 @@ def run_mig_nla(
 
     scene = getattr(context, "scene", None) or bpy.context.scene
     _warn_time_stretch_keyed_props(report, scene)
+    n_modes = _sync_rotation_modes(orig, rep)
+    if n_modes:
+        print(f"[DLM MigNLA] synced rotation_mode on {n_modes} object/bone channel(s)", flush=True)
 
     def _unkeyed():
         # Read orig pose at scene time (not frame_current_final) so unkeyed

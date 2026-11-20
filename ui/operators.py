@@ -318,8 +318,8 @@ class DLM_OT_migrator_copy_attributes(Operator):
     bl_idname = "dlm.migrator_copy_attributes"
     bl_label = "CopyAttr"
     bl_description = (
-        "Copy location and rotation from original to replacement; "
-        "scale only when Retain scale is enabled"
+        "Copy location and rotation from original to replacement "
+        "(including rotation_mode); scale only when Retain scale is enabled"
     )
     bl_icon = "COPY_ID"
     bl_options = {"REGISTER", "UNDO"}
@@ -346,8 +346,9 @@ class DLM_OT_migrator_migrate_nla(Operator):
     bl_idname = "dlm.migrator_migrate_nla"
     bl_label = "MigNLA"
     bl_description = (
-        "Migrate NLA/action from original to replacement; "
-        "also copy unkeyed pose (and object transforms unless Retain transforms is on)"
+        "Migrate NLA/action from original to replacement; sync rotation_mode "
+        "on object and same-named bones; copy unkeyed pose "
+        "(object transforms skipped when Retain transforms is on)"
     )
     bl_icon = "NLA"
     bl_options = {"REGISTER", "UNDO"}
@@ -795,8 +796,8 @@ class DLM_OT_prop_migrator_copy_attributes(Operator):
     bl_idname = "dlm.prop_migrator_copy_attributes"
     bl_label = "CopyAttr"
     bl_description = (
-        "Copy location and rotation on PropMig root object(s); "
-        "scale only when Retain scale is enabled"
+        "Copy location and rotation on PropMig root object(s) "
+        "(including rotation_mode); scale only when Retain scale is enabled"
     )
     bl_icon = "COPY_ID"
     bl_options = {"REGISTER", "UNDO"}
@@ -828,8 +829,8 @@ class DLM_OT_prop_migrator_migrate_nla(Operator):
     bl_idname = "dlm.prop_migrator_migrate_nla"
     bl_label = "MigNLA"
     bl_description = (
-        "Migrate NLA/action for each matched PropMig pair "
-        "(object transforms skipped when Retain transforms is on)"
+        "Migrate NLA/action for each matched PropMig pair; sync rotation_mode; "
+        "object transforms skipped when Retain transforms is on"
     )
     bl_icon = "NLA"
     bl_options = {"REGISTER", "UNDO"}
