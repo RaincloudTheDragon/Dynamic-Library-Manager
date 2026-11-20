@@ -1,3 +1,14 @@
+## [v0.9.0] - 2026-11-20
+
+### Features
+
+- CharMig: **Migrate Character** (core steps; scrub → RetargRelatives → scrub again).
+- MigNLA/CopyAttr: sync `rotation_mode` (quat/euler) Orig→Rep, same-named bones (#12).
+- CharMig/PropMig: swap Orig ↔ Rep (#13); clear pointers on Remove Original (#15).
+- RmOrig: refresh external deps on doomed helpers; MLP default scope includes GN override libs.
+- License: Unlicense (GPL headers removed).
+- PropMig: Redefined behavior on **Migrate Prop**: skips RetargRelatives and reports the scrub → Retarg → scrub flow (#11).
+
 ## [v0.8.0] - 2026-10-05
 
 ### Features
