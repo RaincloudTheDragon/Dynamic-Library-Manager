@@ -70,7 +70,7 @@ There are many modes by which the stubs can be created, the default is a simple 
 
 1. Pick **Rigify** or **ARP**. (ARP rigs must match the expected outliner hierarchy, so support may be limited. I would love to expand this in future.)
 2. Set **Original** and **Replacement** (eyedropper or automatic pair discovery).
-3. Run the steps you need in order, typically:
+3. **Migrate Character** runs CopyAttr → MigNLA → MigCustProps → MigObjConst → MigObjRelatives → MigBoneConst. RetargRelatives is left out on purpose; scrub the timeline → RetargRelatives → scrub again (situational fixes stay manual). Or run the steps individually:
 
 
 | Operator | What it does |
@@ -81,16 +81,16 @@ There are many modes by which the stubs can be created, the default is a simple 
 | MigObjConst | Migrates object constraints of the Armature Object itself (names kept for NLA) |
 | MigObjRelatives | Migrates Parenting of the Armature Object (Child Of when the parent is outside an override hierarchy) |
 | MigBoneConst | Migrates all Bone constraints. By this step, you should scrub through the animation to ensure that the two armatures match as much as possible. Look for Z-Fighting on superimposed geometry and bones; it's what you want because it indicates that RepChar is in perfect sync with OrigChar. |
-| RetargRelatives | Scene-wide orig→rep relative tree (parents, constraints, modifiers, camera DOFm anything that points to the armature, rig objects, or bones). This step causes OrigChar to be bound to RepChar, so the Z-Fighting will lie to you on RepChar's behavior being being accurate, thus discrepancies must be noted in the step previous. |
+| RetargRelatives | Scene-wide orig→rep relative tree (parents, constraints, modifiers, camera DOF, anything that points to the armature, rig objects, or bones). Run after the first scrub; scrub again afterward so offsets settle. This step binds OrigChar to RepChar, so Z-Fighting will lie to you on RepChar accuracy; note discrepancies in the step previous. |
 | Situational: MigBBodyShapekeys | For CC/iC characters. Migrates the shapekeys on OrigChar's `CC_Base_Body` object to that of RepChar. Library-override aware, keyframe/action aware. |
 | Situational: MigFKRot/Tweak Tools | Sometimes, OrigChar and RepChar have inherent discrepancies that can't be cleanly fixed with a simple action migration. These tools will create constraints on certain armature bones (mostly tweaks, but MigFKRot will do so for other bones on the Arm hierarchies) that bind them more closely. There is room for improvement here; sometimes the Rigify `head` bone could use a tweak tool as well. Either way, spawn the bone constrants, then bake them (they go to a new NLA layer by default). If preferred, you can opt not to bake them and keep OrigChar in the scene, but this is not recommended, given that the point is to have all the data modernized to functional, current libraries. |
 | Remove Original | Remaps leftover refs and deletes OrigChar and all library references. Removes `*.rep` from RepChar's action duplicates and purges all originals. |
 
-There is no single “run everything” button for characters; steps are independent due to the inherent complexity of each animation and blendfile. CharMig has been designed to account for a great many situations, but it's still a deterministic procedure; anything it doesn't account for could break the intended behavior of your project. Verify everything, use caution, and use version control to prevent work loss.
+**Remove Original** stays separate so you can verify the replacement first. CharMig accounts for a great many situations, but it's still a deterministic procedure; anything it doesn't account for could break the intended behavior of your project. If it doesn't look right after Migrate > scrub timeline > RetargRel > scrub again, try running each step and scrubbing to verify what step didn't work correctly. In some situations, preserving transforms might need to be enabled for some steps, and disabled for others. Verify everything, use caution, and use version control to prevent work loss.
 
 ### Prop Migrator
 
-Same idea for a non-armature pair — replace old props with new versions, or swap one prop for an entirely different prop (cleanup likely required). **Migrate Prop** runs CopyAttr → MigNLA → MigCustProps → MigObjConst → MigObjRelatives (RetargRelatives is left out on purpose so you can scrub the timeline before/after running it). **Remove Original** is separate so you can verify the replacement before deleting. Constraints and parent hierarchies often need offsets set properly; scrub at least one frame so they snap into place.
+Same idea for a non-armature pair — replace old props with new versions, or swap one prop for an entirely different prop (cleanup likely required). **Migrate Prop** runs CopyAttr → MigNLA → MigCustProps → MigObjConst → MigObjRelatives. Just like the sister function in [CharMig](#character-migrator), RetargRelatives is left out on purpose; scrub the timeline → RetargRelatives → scrub again. **Remove Original** is separate so you can verify the replacement before deleting. Constraints and parent hierarchies often need offsets set properly; scrubbing gives them a frame to snap into place.
 
 ## License
 

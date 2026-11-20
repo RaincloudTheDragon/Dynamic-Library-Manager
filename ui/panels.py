@@ -56,6 +56,8 @@ class DLM_PT_main_panel(Panel):
             row.operator("dlm.picker_replacement_character", text="", icon="EYEDROPPER")
             row = box.row()
             row.operator("dlm.migrator_remove_original", text="Remove Original", icon="TRASH")
+            row = box.row()
+            row.operator("dlm.migrator_run_all", text="Migrate Character", icon="PLAY")
             row = box.row(align=True)
             row.operator("dlm.migrator_copy_attributes", text="CopyAttr", icon="COPY_ID")
             row.operator("dlm.migrator_migrate_nla", text="MigNLA", icon="NLA")

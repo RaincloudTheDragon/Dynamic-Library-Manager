@@ -1748,11 +1748,11 @@ def run_mig_bbody_shapekeys(orig, rep, rep_descendants, context=None):
 
 
 def run_full_migration(context):
-    """
-    Run the full character migration for the single pair (manual or automatic).
+    """Run core character migration for the single pair (manual or automatic).
 
-    Steps: CopyAttr, MigNLA, MigCustProps, MigObjConst, MigObjRelatives,
-    MigBoneConst, RetargRelatives, MigBBodyShapeKeys.
+    Steps: CopyAttr, MigNLA, MigCustProps, MigObjConst, MigObjRelatives, MigBoneConst.
+    RetargRelatives is intentionally omitted. Intended follow-up: scrub timeline → RetargRelatives → scrub again
+    (same split as Migrate Prop). Situational steps (MigBBodyShapeKeys, MigFKRot, tweaks) stay manual.
     Returns (True, message) on success, (False, error_message) on failure.
     """
     props = getattr(context.scene, "dynamic_library_manager", None)
@@ -1768,7 +1768,6 @@ def run_full_migration(context):
         props.replacement_character = rep
 
     orig_to_rep = {orig: rep}
-    rep_descendants = descendants(rep)
 
     try:
         retain_scale = bool(getattr(props, "retarg_retain_scale", False)) if props else False
@@ -1778,20 +1777,25 @@ def run_full_migration(context):
         run_mig_obj_const(orig, rep, orig_to_rep)
         run_mig_obj_relatives(orig, rep, orig_to_rep, scene=context.scene)
         run_mig_bone_const(orig, rep, orig_to_rep)
-        run_retarg_relatives(
-            orig, rep, rep_descendants, orig_to_rep, retain_scale=retain_scale
-        )
-        run_mig_bbody_shapekeys(orig, rep, rep_descendants, context)
     except Exception as e:
         return False, str(e)
-    return True, f"Migrated {orig.name} → {rep.name}"
+    print(
+        "[DLM Migrate Character] skipped RetargRelatives; scrub → RetargRelatives → scrub again "
+        "(offsets may need a frame to settle).",
+        flush=True,
+    )
+    return (
+        True,
+        f"Migrated {orig.name} → {rep.name}. "
+        "RetargRelatives skipped; scrub → RetargRelatives → scrub again.",
+    )
 
 
 def run_full_prop_migration(context):
     """Migrate a prop Object/Collection pair: CopyAttr (roots), MigNLA/MigCustProps/
     MigObjConst (all matched), MigObjRelatives (roots).
 
-    RetargRelatives is intentionally omitted so you can scrub before/after running it separately (#11).
+    RetargRelatives is intentionally omitted (#11). Intended follow-up: scrub timeline → RetargRelatives → scrub again.
     Returns (True, message) or (False, error)."""
     roots, mapping = get_prop_migration_context(context)
     if not roots or not mapping:
@@ -1813,14 +1817,14 @@ def run_full_prop_migration(context):
         return False, str(e)
     n = len(mapping)
     print(
-        "[DLM Migrate Prop] skipped RetargRelatives. Scrub the timeline, then run it separately "
+        "[DLM Migrate Prop] skipped RetargRelatives; scrub → RetargRelatives → scrub again "
         "(offsets may need a frame to settle).",
         flush=True,
     )
     return (
         True,
         f"Prop migrated {n} object pair(s) ({primary_orig.name} → {primary_rep.name}). "
-        "RetargRelatives skipped. Scrub the timeline, then run RetargRelatives separately.",
+        "RetargRelatives skipped; scrub → RetargRelatives → scrub again.",
     )
 
 

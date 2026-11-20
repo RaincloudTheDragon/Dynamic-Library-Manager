@@ -496,6 +496,28 @@ class DLM_OT_migrator_retarget_relations(Operator):
             return {"CANCELLED"}
 
 
+class DLM_OT_migrator_run_all(Operator):
+    bl_idname = "dlm.migrator_run_all"
+    bl_label = "Migrate Character"
+    bl_description = (
+        "Run core character migration steps: CopyAttr, MigNLA, MigCustProps, "
+        "MigObjConst, MigObjRelatives, MigBoneConst. Then scrub → RetargRelatives → "
+        "scrub again; situational fixes stay manual"
+    )
+    bl_icon = "PLAY"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        from ..ops.migrator import run_full_migration
+
+        ok, msg = run_full_migration(context)
+        if ok:
+            self.report({"INFO"}, msg)
+            return {"FINISHED"}
+        self.report({"ERROR"}, msg)
+        return {"CANCELLED"}
+
+
 class DLM_OT_migrator_basebody_shapekeys(Operator):
     bl_idname = "dlm.migrator_basebody_shapekeys"
     bl_label = "MigBBodyShapeKeys"
@@ -942,7 +964,7 @@ class DLM_OT_prop_migrator_run_all(Operator):
     bl_description = (
         "Run prop migration steps on Object/Collection targets "
         "(hierarchy-aware): CopyAttr, MigNLA, MigCustProps, MigObjConst, "
-        "MigObjRelatives. RetargRelatives is left for you to run after scrubbing"
+        "MigObjRelatives. Then scrub → RetargRelatives → scrub again"
     )
     bl_icon = "PLAY"
     bl_options = {"REGISTER", "UNDO"}
@@ -1228,6 +1250,7 @@ OPERATOR_CLASSES = [
     DLM_OT_migrator_object_relatives,
     DLM_OT_migrator_bone_constraints,
     DLM_OT_migrator_retarget_relations,
+    DLM_OT_migrator_run_all,
     DLM_OT_migrator_basebody_shapekeys,
     DLM_OT_picker_original_prop,
     DLM_OT_picker_replacement_prop,
